@@ -89,6 +89,26 @@ docker run --rm -p 8080:8080 -e OPENAI_API_KEY=your-key ai-gateway
 - API доступно на `http://localhost:8080`
 - Admin UI доступен на `http://localhost:8080/`
 
+### Локально через `make`
+
+В проекте есть `Makefile` с базовыми командами для Docker:
+
+```bash
+make help
+make docker-build IMAGE=ghcr.io/<username>/ai-gateway TAG=v0.1.0
+make docker-run IMAGE=ghcr.io/<username>/ai-gateway TAG=v0.1.0 ENV_FILE=.env PORT=8080
+```
+
+Для production-сервера основной путь теперь другой:
+
+- локальная разработка и сборка образа — через `make`
+- управление приложением прямо на VPS — через `agctl`
+
+Смотри:
+
+- `docs/vps-deploy.md`
+- `docs/server-ctl.md`
+
 ### Важные env-переменные
 
 - `OPENAI_API_KEY`

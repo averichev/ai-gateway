@@ -8,6 +8,7 @@ RUN npm run build
 FROM rust:1.91-bookworm AS backend-build
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
+COPY .env.example ./
 COPY src ./src
 COPY migrations ./migrations
 RUN cargo build --release

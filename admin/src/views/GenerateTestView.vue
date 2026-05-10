@@ -307,9 +307,15 @@ onMounted(loadRoutes)
   border: 1px solid #cbd5e1;
   border-radius: 8px;
   color: #172033;
+  caret-color: #172033;
   font: inherit;
   padding: 0.72rem 0.8rem;
   background: #ffffff;
+}
+
+.field-control::selection {
+  color: #ffffff;
+  background: #2563eb;
 }
 
 .field-control:focus {
@@ -361,6 +367,7 @@ onMounted(loadRoutes)
   border-radius: 8px;
   padding: 1rem;
   background: #f8fafc;
+  color: #172033;
 }
 
 .response-header {
@@ -372,6 +379,7 @@ onMounted(loadRoutes)
 
 .response-header h3 {
   margin: 0;
+  color: #172033;
   font-size: 1.1rem;
 }
 
@@ -390,10 +398,17 @@ onMounted(loadRoutes)
 .response-content pre {
   min-height: 260px;
   margin: 0;
+  color: #172033;
   white-space: pre-wrap;
   word-break: break-word;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   line-height: 1.5;
+}
+
+.response-content pre::selection,
+.stats-grid dd::selection {
+  color: #ffffff;
+  background: #2563eb;
 }
 
 .stats-grid {
@@ -415,6 +430,7 @@ onMounted(loadRoutes)
 
 .stats-grid dd {
   margin: 0.2rem 0 0;
+  color: #172033;
   overflow-wrap: anywhere;
 }
 

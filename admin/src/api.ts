@@ -36,9 +36,48 @@ export interface ModelRouteItem {
   updated_at: string
 }
 
+export interface GenerateMessage {
+  role: 'system' | 'user' | 'assistant'
+  content: string
+}
+
+export interface GenerateRequest {
+  model: string
+  messages: GenerateMessage[]
+  options?: {
+    temperature?: number
+    max_tokens?: number
+  }
+}
+
+export interface GenerateResponse {
+  id: string
+  model: string
+  provider: string
+  output_text: string
+  finish_reason: string
+  usage?: {
+    input_tokens?: number
+    output_tokens?: number
+  }
+}
+
+export interface ErrorResponse {
+  request_id: string
+  error: {
+    code: string
+    message: string
+  }
+}
+
 const api = axios.create({
   baseURL: '/api/admin',
   timeout: 15_000,
+})
+
+const generateApi = axios.create({
+  baseURL: '/api/v1',
+  timeout: 120_000,
 })
 
 export async function fetchRequests(limit = 100): Promise<RequestListItem[]> {
@@ -62,6 +101,19 @@ export async function fetchProviders(): Promise<ProviderItem[]> {
 export async function fetchModelRoutes(): Promise<ModelRouteItem[]> {
   const { data } = await api.get<ModelRouteItem[]>('/model-routes')
   return data
+}
+
+export async function generateText(payload: GenerateRequest): Promise<GenerateResponse> {
+  const { data } = await generateApi.post<GenerateResponse>('/generate', payload)
+  return data
+}
+
+export function formatApiError(error: unknown, fallback: string): string {
+  if (axios.isAxiosError<ErrorResponse>(error)) {
+    return error.response?.data?.error?.message ?? error.message
+  }
+
+  return error instanceof Error ? error.message : fallback
 }
 
 export function formatDateTime(value: string): string {

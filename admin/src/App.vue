@@ -1,6 +1,7 @@
 <script setup lang="ts">
 const items = [
   { label: 'Запросы', icon: 'pi pi-list', route: '/requests' },
+  { label: 'Проверка', icon: 'pi pi-send', route: '/generate-test' },
   { label: 'Providers', icon: 'pi pi-server', route: '/providers' },
   { label: 'Model Routes', icon: 'pi pi-sitemap', route: '/model-routes' },
 ]

@@ -192,3 +192,131 @@ struct OpenAiUsagePayload {
     #[serde(default)]
     completion_tokens: Option<i32>,
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::Duration,
+    };
+
+    use axum::{
+        Json, Router,
+        extract::State,
+        http::{HeaderMap, StatusCode, header},
+        routing::post,
+    };
+    use serde_json::{Value, json};
+    use tokio::net::TcpListener;
+
+    use super::*;
+    use crate::domain::{GenerateMessageDto, GenerateOptionsDto, MessageRole};
+
+    #[derive(Clone)]
+    struct MockApiState {
+        request_count: Arc<AtomicUsize>,
+    }
+
+    #[tokio::test]
+    async fn generate_sends_request_to_api_and_returns_response() {
+        let request_count = Arc::new(AtomicUsize::new(0));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = Router::new()
+            .route("/chat/completions", post(handle_chat_completions))
+            .with_state(MockApiState {
+                request_count: request_count.clone(),
+            });
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let provider = OpenAiCompatibleProvider::new().unwrap();
+        let route = ResolvedRouteRecord {
+            external_model: "external-test-model".to_owned(),
+            provider_code: "mock-provider".to_owned(),
+            provider_kind: "openai-compatible".to_owned(),
+            provider_base_url: format!("http://{address}"),
+            provider_api_key_env: "TEST_API_KEY".to_owned(),
+            provider_timeout_ms: 1_000,
+        };
+        let request = GenerateRequestDto {
+            model: "test-model".to_owned(),
+            messages: vec![GenerateMessageDto {
+                role: MessageRole::User,
+                content: "ping".to_owned(),
+            }],
+            options: GenerateOptionsDto {
+                temperature: Some(0.2),
+                max_tokens: Some(32),
+            },
+        };
+
+        let response = provider
+            .generate(&route, &request, "test-token")
+            .await
+            .unwrap();
+
+        server.abort();
+        tokio::time::timeout(Duration::from_secs(1), server)
+            .await
+            .expect("mock API server did not stop")
+            .expect_err("mock API server stopped without abort");
+
+        assert_eq!(request_count.load(Ordering::SeqCst), 1);
+        assert_eq!(response.output_text, "pong");
+        assert_eq!(response.finish_reason, "stop");
+        assert_eq!(
+            response.usage.as_ref().and_then(|usage| usage.input_tokens),
+            Some(7)
+        );
+        assert_eq!(
+            response
+                .usage
+                .as_ref()
+                .and_then(|usage| usage.output_tokens),
+            Some(3)
+        );
+    }
+
+    async fn handle_chat_completions(
+        State(state): State<MockApiState>,
+        headers: HeaderMap,
+        Json(payload): Json<Value>,
+    ) -> (StatusCode, Json<Value>) {
+        state.request_count.fetch_add(1, Ordering::SeqCst);
+
+        assert_eq!(
+            headers
+                .get(header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer test-token")
+        );
+        assert_eq!(payload["model"], json!("external-test-model"));
+        assert_eq!(payload["messages"][0]["role"], json!("user"));
+        assert_eq!(payload["messages"][0]["content"], json!("ping"));
+        assert_eq!(payload["max_tokens"], json!(32));
+        assert_eq!(payload["temperature"].as_f64(), Some(0.2));
+
+        (
+            StatusCode::OK,
+            Json(json!({
+                "choices": [
+                    {
+                        "message": {
+                            "content": "pong"
+                        },
+                        "finish_reason": "stop"
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 7,
+                    "completion_tokens": 3
+                }
+            })),
+        )
+    }
+}

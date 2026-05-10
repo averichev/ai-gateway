@@ -127,6 +127,22 @@ Query params:
 
 Список alias routes, через которые gateway резолвит модель.
 
+### POST `/api/admin/generate`
+
+Admin-only smoke-test генерации. Формат совпадает с `POST /api/v1/generate`, но дополнительно можно передать `api_key` для разового вызова upstream-провайдера:
+
+```json
+{
+  "model": "smart-default",
+  "api_key": "sk-...",
+  "messages": [
+    { "role": "user", "content": "Проверь маршрут" }
+  ]
+}
+```
+
+Если `api_key` не передан, gateway берёт ключ из env по `providers.api_key_env`. Переданный ключ не сохраняется в таблицу `requests`; в истории остаются только обычные preview запроса и ответа.
+
 ## GET `/health`
 
 Простейший health endpoint:

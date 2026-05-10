@@ -34,6 +34,7 @@ pub fn build_app(state: AppState) -> Router {
     let router = Router::new()
         .route("/health", get(healthcheck))
         .route("/api/v1/generate", post(generate::handle_generate))
+        .route("/api/admin/generate", post(admin::handle_generate))
         .route("/api/admin/requests", get(admin::list_requests))
         .route("/api/admin/requests/{id}", get(admin::get_request_details))
         .route("/api/admin/providers", get(admin::list_providers))

@@ -44,6 +44,7 @@ export interface GenerateMessage {
 export interface GenerateRequest {
   model: string
   messages: GenerateMessage[]
+  api_key?: string
   options?: {
     temperature?: number
     max_tokens?: number
@@ -75,11 +76,6 @@ const api = axios.create({
   timeout: 15_000,
 })
 
-const generateApi = axios.create({
-  baseURL: '/api/v1',
-  timeout: 120_000,
-})
-
 export async function fetchRequests(limit = 100): Promise<RequestListItem[]> {
   const { data } = await api.get<RequestListItem[]>('/requests', {
     params: { limit },
@@ -104,7 +100,9 @@ export async function fetchModelRoutes(): Promise<ModelRouteItem[]> {
 }
 
 export async function generateText(payload: GenerateRequest): Promise<GenerateResponse> {
-  const { data } = await generateApi.post<GenerateResponse>('/generate', payload)
+  const { data } = await api.post<GenerateResponse>('/generate', payload, {
+    timeout: 120_000,
+  })
   return data
 }
 

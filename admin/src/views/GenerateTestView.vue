@@ -19,6 +19,7 @@ const routesLoading = ref(true)
 const routesError = ref('')
 const routes = ref<ModelRouteItem[]>([])
 const model = ref('')
+const apiKey = ref('')
 const systemPrompt = ref('')
 const userPrompt = ref('Скажи коротко: gateway работает?')
 const temperature = ref('0.2')
@@ -90,6 +91,7 @@ async function sendRequest() {
     response.value = await generateText({
       model: model.value.trim(),
       messages,
+      api_key: normalizeOptionalText(apiKey.value),
       options,
     })
     latencyMs.value = Math.round(performance.now() - startedAt)
@@ -120,6 +122,12 @@ function parseOptionalNumber(value: string): number | undefined {
   const parsed = Number(normalized)
 
   return Number.isFinite(parsed) ? parsed : undefined
+}
+
+function normalizeOptionalText(value: string): string | undefined {
+  const normalized = value.trim()
+
+  return normalized ? normalized : undefined
 }
 
 onMounted(loadRoutes)
@@ -154,6 +162,18 @@ onMounted(loadRoutes)
                   {{ route.provider_code }} / {{ route.external_model }}
                 </option>
               </datalist>
+            </div>
+
+            <div class="field-group">
+              <label for="apiKey">API key</label>
+              <input
+                id="apiKey"
+                v-model="apiKey"
+                class="field-control"
+                type="password"
+                autocomplete="off"
+                placeholder="По умолчанию используется env provider"
+              />
             </div>
 
             <div class="field-group">

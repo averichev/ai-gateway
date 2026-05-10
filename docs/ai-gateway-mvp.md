@@ -23,7 +23,7 @@
 - один adapter `openai-compatible`;
 - хранение истории вызовов в таблице `requests`;
 - базовый admin API;
-- минимальный PrimeVue admin UI;
+- минимальный PrimeVue admin UI со smoke-test генерации;
 - один Docker-контейнер, внутри которого запускаются PostgreSQL и приложение.
 
 ## Что не делается в этой версии
@@ -152,4 +152,4 @@ VALUES ('reasoning-default', 'openai', 'o4-mini', TRUE);
 - история хранит только preview, а не полный prompt/response;
 - route resolution пока работает только для enabled-конфигураций;
 - retries и fallback отсутствуют;
-- UI предназначен для наблюдения, а не администрирования настроек.
+- UI предназначен для наблюдения и ручной проверки маршрута. В smoke-test можно указать API key разово; постоянные provider secrets по-прежнему задаются через env, а не через БД.

@@ -10,6 +10,14 @@ pub struct GenerateRequestDto {
     pub options: GenerateOptionsDto,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct AdminGenerateRequestDto {
+    #[serde(flatten)]
+    pub request: GenerateRequestDto,
+    #[serde(default)]
+    pub api_key: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GenerateMessageDto {
     pub role: MessageRole,

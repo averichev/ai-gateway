@@ -6,7 +6,10 @@ use serde::Deserialize;
 
 use crate::{
     app::{AppHttpError, AppState},
-    domain::{ModelRouteDto, ProviderDto, RequestDetailsDto, RequestListItemDto},
+    domain::{
+        AdminGenerateRequestDto, GenerateResponseDto, ModelRouteDto, ProviderDto,
+        RequestDetailsDto, RequestListItemDto,
+    },
 };
 
 #[derive(Debug, Deserialize)]
@@ -29,6 +32,18 @@ pub async fn list_requests(
         .collect();
 
     Ok(Json(items))
+}
+
+pub async fn handle_generate(
+    State(state): State<AppState>,
+    Json(payload): Json<AdminGenerateRequestDto>,
+) -> Result<Json<GenerateResponseDto>, AppHttpError> {
+    let response = state
+        .generate_service
+        .generate_with_api_key_override(payload.request, payload.api_key)
+        .await?;
+
+    Ok(Json(response))
 }
 
 pub async fn get_request_details(

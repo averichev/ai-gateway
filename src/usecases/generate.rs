@@ -43,6 +43,22 @@ impl GenerateService {
         &self,
         request: GenerateRequestDto,
     ) -> Result<GenerateResponseDto, ServiceError> {
+        self.generate_inner(request, None).await
+    }
+
+    pub async fn generate_with_api_key_override(
+        &self,
+        request: GenerateRequestDto,
+        api_key_override: Option<String>,
+    ) -> Result<GenerateResponseDto, ServiceError> {
+        self.generate_inner(request, api_key_override).await
+    }
+
+    async fn generate_inner(
+        &self,
+        request: GenerateRequestDto,
+        api_key_override: Option<String>,
+    ) -> Result<GenerateResponseDto, ServiceError> {
         let request_id = new_request_id();
         let prompt_preview = preview_messages(&request.messages, self.request_preview_chars);
 
@@ -131,19 +147,22 @@ impl GenerateService {
                 )
             })?;
 
-        let api_key = env::var(&route.provider_api_key_env)
-            .map_err(|_| ProviderError::MissingApiKey(route.provider_api_key_env.clone()))
-            .map_err(|error| {
-                self.provider_error_to_service_error(
-                    request_id.clone(),
-                    &request.model,
-                    &route.provider_code,
-                    &route.external_model,
-                    prompt_preview.clone(),
-                    started_at.elapsed().as_millis() as i64,
-                    error,
-                )
-            })?;
+        let api_key = match normalize_api_key_override(api_key_override) {
+            Some(api_key) => Ok(api_key),
+            None => env::var(&route.provider_api_key_env),
+        }
+        .map_err(|_| ProviderError::MissingApiKey(route.provider_api_key_env.clone()))
+        .map_err(|error| {
+            self.provider_error_to_service_error(
+                request_id.clone(),
+                &request.model,
+                &route.provider_code,
+                &route.external_model,
+                prompt_preview.clone(),
+                started_at.elapsed().as_millis() as i64,
+                error,
+            )
+        })?;
 
         let result = adapter
             .generate(&route, &request, &api_key)
@@ -269,6 +288,12 @@ fn build_response(
 
 fn new_request_id() -> String {
     format!("req_{}", Uuid::new_v4().simple())
+}
+
+fn normalize_api_key_override(api_key: Option<String>) -> Option<String> {
+    api_key
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
 }
 
 fn preview_messages(messages: &[GenerateMessageDto], max_chars: usize) -> Option<String> {

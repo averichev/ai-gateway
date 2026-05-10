@@ -6,16 +6,18 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, get_service, post},
 };
-use serde_json::json;
 use tower_http::{
     services::{ServeDir, ServeFile},
     trace::TraceLayer,
 };
+use utoipa::OpenApi;
+use utoipa_swagger_ui::SwaggerUi;
 use uuid::Uuid;
 
 use crate::{
-    domain::ErrorResponseDto,
+    domain::{ErrorResponseDto, HealthResponseDto},
     http::{admin, generate},
+    openapi::ApiDoc,
     repositories::{PostgresRequestsRepository, PostgresRoutesRepository, RepositoryError},
     usecases::generate::{GenerateService, ServiceError},
 };
@@ -39,6 +41,7 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/admin/requests/{id}", get(admin::get_request_details))
         .route("/api/admin/providers", get(admin::list_providers))
         .route("/api/admin/model-routes", get(admin::list_model_routes))
+        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
@@ -52,10 +55,18 @@ pub fn build_app(state: AppState) -> Router {
     }
 }
 
-async fn healthcheck() -> Json<serde_json::Value> {
-    Json(json!({
-        "status": "ok"
-    }))
+#[utoipa::path(
+    get,
+    path = "/health",
+    tag = "health",
+    responses(
+        (status = 200, description = "Service is available", body = HealthResponseDto)
+    )
+)]
+pub async fn healthcheck() -> Json<HealthResponseDto> {
+    Json(HealthResponseDto {
+        status: "ok".to_owned(),
+    })
 }
 
 #[derive(Debug)]

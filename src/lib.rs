@@ -3,6 +3,7 @@ pub mod config;
 pub mod ctl;
 pub mod domain;
 pub mod http;
+pub mod openapi;
 pub mod providers;
 pub mod repositories;
 pub mod server;

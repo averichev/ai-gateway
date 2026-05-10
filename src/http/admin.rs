@@ -18,6 +18,18 @@ pub struct RequestsQuery {
     limit: i64,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/admin/requests",
+    tag = "admin",
+    params(
+        ("limit" = Option<i64>, Query, description = "Maximum number of requests to return, clamped to 1..200")
+    ),
+    responses(
+        (status = 200, description = "Recent requests", body = [RequestListItemDto]),
+        (status = 500, description = "Storage error", body = crate::domain::ErrorResponseDto),
+    )
+)]
 pub async fn list_requests(
     State(state): State<AppState>,
     Query(query): Query<RequestsQuery>,
@@ -34,6 +46,20 @@ pub async fn list_requests(
     Ok(Json(items))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/admin/generate",
+    tag = "admin",
+    request_body = AdminGenerateRequestDto,
+    responses(
+        (status = 200, description = "Generation completed", body = GenerateResponseDto),
+        (status = 400, description = "Invalid request", body = crate::domain::ErrorResponseDto),
+        (status = 404, description = "Model route was not found", body = crate::domain::ErrorResponseDto),
+        (status = 500, description = "Gateway misconfiguration or storage error", body = crate::domain::ErrorResponseDto),
+        (status = 502, description = "Provider error", body = crate::domain::ErrorResponseDto),
+        (status = 504, description = "Provider timeout", body = crate::domain::ErrorResponseDto),
+    )
+)]
 pub async fn handle_generate(
     State(state): State<AppState>,
     Json(payload): Json<AdminGenerateRequestDto>,
@@ -46,6 +72,19 @@ pub async fn handle_generate(
     Ok(Json(response))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/admin/requests/{id}",
+    tag = "admin",
+    params(
+        ("id" = String, Path, description = "Request id")
+    ),
+    responses(
+        (status = 200, description = "Request details", body = RequestDetailsDto),
+        (status = 404, description = "Request was not found", body = crate::domain::ErrorResponseDto),
+        (status = 500, description = "Storage error", body = crate::domain::ErrorResponseDto),
+    )
+)]
 pub async fn get_request_details(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -58,6 +97,15 @@ pub async fn get_request_details(
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/admin/providers",
+    tag = "admin",
+    responses(
+        (status = 200, description = "Provider configurations", body = [ProviderDto]),
+        (status = 500, description = "Storage error", body = crate::domain::ErrorResponseDto),
+    )
+)]
 pub async fn list_providers(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<ProviderDto>>, AppHttpError> {
@@ -72,6 +120,15 @@ pub async fn list_providers(
     Ok(Json(items))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/admin/model-routes",
+    tag = "admin",
+    responses(
+        (status = 200, description = "Model alias routes", body = [ModelRouteDto]),
+        (status = 500, description = "Storage error", body = crate::domain::ErrorResponseDto),
+    )
+)]
 pub async fn list_model_routes(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<ModelRouteDto>>, AppHttpError> {

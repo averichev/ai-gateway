@@ -1,8 +1,9 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
+use utoipa::ToSchema;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct GenerateRequestDto {
     pub model: String,
     pub messages: Vec<GenerateMessageDto>,
@@ -10,7 +11,7 @@ pub struct GenerateRequestDto {
     pub options: GenerateOptionsDto,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct AdminGenerateRequestDto {
     #[serde(flatten)]
     pub request: GenerateRequestDto,
@@ -18,13 +19,13 @@ pub struct AdminGenerateRequestDto {
     pub api_key: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct GenerateMessageDto {
     pub role: MessageRole,
     pub content: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, ToSchema)]
 pub struct GenerateOptionsDto {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
@@ -32,7 +33,7 @@ pub struct GenerateOptionsDto {
     pub max_tokens: Option<i32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum MessageRole {
     System,
@@ -50,7 +51,7 @@ impl MessageRole {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct GenerateResponseDto {
     pub id: String,
     pub model: String,
@@ -61,7 +62,7 @@ pub struct GenerateResponseDto {
     pub usage: Option<TokenUsageDto>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct TokenUsageDto {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_tokens: Option<i32>,
@@ -69,16 +70,21 @@ pub struct TokenUsageDto {
     pub output_tokens: Option<i32>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ErrorResponseDto {
     pub request_id: String,
     pub error: ErrorBodyDto,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ErrorBodyDto {
     pub code: String,
     pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct HealthResponseDto {
+    pub status: String,
 }
 
 #[derive(Debug, Clone, Serialize, FromRow)]
@@ -153,7 +159,7 @@ pub struct ProviderGenerateResult {
     pub usage: Option<TokenUsageDto>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct RequestListItemDto {
     pub id: String,
     pub created_at: DateTime<Utc>,
@@ -167,7 +173,7 @@ pub struct RequestListItemDto {
     pub output_tokens: Option<i32>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct RequestDetailsDto {
     pub id: String,
     pub created_at: DateTime<Utc>,
@@ -183,7 +189,7 @@ pub struct RequestDetailsDto {
     pub response_preview: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ProviderDto {
     pub code: String,
     pub kind: String,
@@ -194,7 +200,7 @@ pub struct ProviderDto {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ModelRouteDto {
     pub alias: String,
     pub provider_code: String,

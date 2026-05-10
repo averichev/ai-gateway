@@ -1,5 +1,10 @@
 # REST API
 
+## OpenAPI / Swagger UI
+
+- OpenAPI JSON: `GET /api-docs/openapi.json`
+- Swagger UI: `GET /swagger-ui/`
+
 ## Общие принципы
 
 - Все клиентские приложения ходят только в gateway.

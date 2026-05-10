@@ -6,6 +6,7 @@ TAG ?= latest
 PORT ?= 8080
 CONTAINER_NAME ?= $(APP_NAME)
 ENV_FILE ?= .env
+DOCKER_BUILDER ?= default
 DOCKER_BUILD_FLAGS ?= --load
 DOCKER_RUN_FLAGS ?=
 PREFIX ?= /usr/local
@@ -17,7 +18,7 @@ help:
 	@echo "Available targets:"
 	@echo "  make run            Build and start the app in Docker"
 	@echo "  make restart        Rebuild and restart the app in Docker"
-	@echo "  make docker-build   IMAGE=<registry/repo> TAG=<tag> DOCKER_BUILD_FLAGS=--load"
+	@echo "  make docker-build   IMAGE=<registry/repo> TAG=<tag> DOCKER_BUILDER=default"
 	@echo "  make docker-run     ENV_FILE=.env PORT=8080 CONTAINER_NAME=ai-gateway"
 	@echo "  make docker-stop    CONTAINER_NAME=ai-gateway"
 	@echo "  make docker-logs    CONTAINER_NAME=ai-gateway"
@@ -45,7 +46,7 @@ docker-check:
 	}
 
 docker-build: docker-check
-	docker buildx build $(DOCKER_BUILD_FLAGS) -t $(IMAGE):$(TAG) .
+	docker buildx build --builder $(DOCKER_BUILDER) $(DOCKER_BUILD_FLAGS) -t $(IMAGE):$(TAG) .
 
 docker-run: docker-check ensure-env
 	docker run -d \

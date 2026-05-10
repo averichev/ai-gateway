@@ -29,11 +29,7 @@ RUN chmod +x /app/entrypoint.sh
 
 ENV APP_HOST=0.0.0.0 \
     APP_PORT=8080 \
-    ADMIN_DIST_DIR=/app/admin/dist \
-    POSTGRES_USER=ai_gateway \
-    POSTGRES_PASSWORD=ai_gateway \
-    POSTGRES_DB=ai_gateway \
-    DATABASE_URL=postgres://ai_gateway:ai_gateway@127.0.0.1:5432/ai_gateway
+    ADMIN_DIST_DIR=/app/admin/dist
 
 EXPOSE 8080 5432
 

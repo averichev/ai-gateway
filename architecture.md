@@ -117,6 +117,20 @@ ORM не добавлялся сознательно, чтобы не услож
 - минимальный PrimeVue admin;
 - запуск в одном Docker-контейнере с PostgreSQL внутри.
 
+## Архитектурное направление
+
+Ближайший фокус — отточить `openai-compatible`, потому что это самый дешёвый путь получить рабочий gateway для OpenAI и OpenAI-compatible провайдеров.
+
+При этом core проекта не должен становиться OpenAI-centric:
+
+- основной контракт gateway остаётся внутренним `POST /api/v1/generate`;
+- OpenAI request/response shapes живут внутри `src/providers/openai_compatible.rs`;
+- use case работает через `ProviderAdapter`, а не через OpenAI DTO;
+- новые внешние протоколы добавляются отдельными adapters по `provider.kind`;
+- входящие OpenAI-compatible endpoints, если появятся, должны быть compatibility layer поверх `GenerateService`, а не новым core API.
+
+Подробнее: `docs/provider-strategy.md`.
+
 ## Что сознательно отложено
 
 - streaming;

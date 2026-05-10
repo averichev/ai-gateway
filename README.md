@@ -163,6 +163,7 @@ docker run --rm -p 8080:8080 --env-file .env ai-gateway
 Подробнее:
 
 - [Storage and Model Routing](docs/storage-and-routing.md)
+- [Provider Strategy](docs/provider-strategy.md)
 - [Architecture](architecture.md)
 
 ## Граница текущей версии
@@ -187,6 +188,7 @@ docker run --rm -p 8080:8080 --env-file .env ai-gateway
 - [AI Gateway MVP](docs/ai-gateway-mvp.md)
 - [REST API](docs/rest-api.md)
 - [Storage and Model Routing](docs/storage-and-routing.md)
+- [Provider Strategy](docs/provider-strategy.md)
 - [Deploy on VPS](docs/vps-deploy.md)
 - [Server CTL](docs/server-ctl.md)
 - [Architecture](architecture.md)

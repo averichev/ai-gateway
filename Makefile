@@ -11,11 +11,12 @@ DOCKER_RUN_FLAGS ?=
 PREFIX ?= /usr/local
 BIN_DIR ?= $(PREFIX)/bin
 
-.PHONY: help run ensure-env docker-check docker-build docker-run docker-stop docker-logs docker-shell docker-tag docker-push docker-release ctl-build ctl-release ctl-install
+.PHONY: help run restart ensure-env docker-check docker-build docker-run docker-stop docker-logs docker-shell docker-tag docker-push docker-release ctl-build ctl-release ctl-install
 
 help:
 	@echo "Available targets:"
 	@echo "  make run            Build and start the app in Docker"
+	@echo "  make restart        Rebuild and restart the app in Docker"
 	@echo "  make docker-build   IMAGE=<registry/repo> TAG=<tag> DOCKER_BUILD_FLAGS=--load"
 	@echo "  make docker-run     ENV_FILE=.env PORT=8080 CONTAINER_NAME=ai-gateway"
 	@echo "  make docker-stop    CONTAINER_NAME=ai-gateway"
@@ -28,8 +29,8 @@ help:
 	@echo "  make ctl-release"
 	@echo "  make ctl-install   PREFIX=/usr/local"
 
-run: IMAGE := $(APP_NAME)
-run: ensure-env docker-build docker-stop docker-run
+run restart: IMAGE := $(APP_NAME)
+run restart: ensure-env docker-build docker-stop docker-run
 
 ensure-env:
 	@if [ ! -f "$(ENV_FILE)" ]; then \

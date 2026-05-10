@@ -1,13 +1,16 @@
 <script setup lang="ts">
+import { FilterMatchMode } from '@primevue/core/api'
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import Button from 'primevue/button'
-import Card from 'primevue/card'
 import Column from 'primevue/column'
 import DataTable from 'primevue/datatable'
+import IconField from 'primevue/iconfield'
+import InputIcon from 'primevue/inputicon'
+import InputText from 'primevue/inputtext'
 import Message from 'primevue/message'
-import ProgressSpinner from 'primevue/progressspinner'
 import Tag from 'primevue/tag'
+import Toolbar from 'primevue/toolbar'
 
 import { fetchRequests, formatDateTime, severityForStatus, type RequestListItem } from '../api'
 
@@ -15,6 +18,9 @@ const router = useRouter()
 const loading = ref(true)
 const errorMessage = ref('')
 const items = ref<RequestListItem[]>([])
+const filters = ref({
+  global: { value: null as string | null, matchMode: FilterMatchMode.CONTAINS },
+})
 
 async function loadRequests() {
   loading.value = true
@@ -37,90 +43,94 @@ onMounted(loadRequests)
 </script>
 
 <template>
-  <section class="page-grid">
-    <Card>
-      <template #title>Запросы</template>
-      <template #subtitle>Последние вызовы gateway и их итоговый маршрут</template>
-      <template #content>
-        <div class="actions-row">
-          <Button label="Обновить" icon="pi pi-refresh" @click="loadRequests" />
-        </div>
+  <div class="grid grid-cols-12 gap-8">
+    <div class="col-span-12">
+      <div class="card">
+        <Toolbar class="mb-6">
+          <template #start>
+            <div>
+              <h4 class="m-0">Запросы</h4>
+              <div class="text-muted mt-4">Последние вызовы gateway и итоговый маршрут</div>
+            </div>
+          </template>
 
-        <div v-if="loading" class="loading-box">
-          <ProgressSpinner stroke-width="4" />
-        </div>
+          <template #end>
+            <Button label="Обновить" icon="pi pi-refresh" severity="secondary" @click="loadRequests" />
+          </template>
+        </Toolbar>
 
-        <Message v-else-if="errorMessage" severity="error" :closable="false">
+        <Message v-if="errorMessage" severity="error" :closable="false" class="mb-4">
           {{ errorMessage }}
         </Message>
 
         <DataTable
-          v-else
+          v-model:filters="filters"
           :value="items"
+          :loading="loading"
+          data-key="id"
           paginator
           :rows="15"
+          :rows-per-page-options="[15, 30, 50]"
+          paginator-template="FirstPageLink PrevPageLink PageLinks NextPageLink LastPageLink CurrentPageReport RowsPerPageDropdown"
+          current-page-report-template="{first}-{last} из {totalRecords}"
+          :global-filter-fields="['id', 'model_alias', 'provider_code', 'external_model', 'status', 'error_message']"
           responsive-layout="scroll"
           striped-rows
         >
-          <Column field="created_at" header="Время">
+          <template #header>
+            <div class="table-header">
+              <h4 class="m-0">Журнал</h4>
+              <IconField>
+                <InputIcon>
+                  <i class="pi pi-search" />
+                </InputIcon>
+                <InputText v-model="filters.global.value" placeholder="Поиск..." />
+              </IconField>
+            </div>
+          </template>
+
+          <Column field="created_at" header="Время" sortable style="min-width: 12rem">
             <template #body="{ data }">
               {{ formatDateTime(data.created_at) }}
             </template>
           </Column>
 
-          <Column field="model_alias" header="Alias" />
-          <Column field="provider_code" header="Provider" />
-          <Column field="external_model" header="Модель" />
+          <Column field="model_alias" header="Alias" sortable style="min-width: 10rem" />
+          <Column field="provider_code" header="Provider" sortable style="min-width: 10rem" />
+          <Column field="external_model" header="Модель" sortable style="min-width: 14rem" />
 
-          <Column field="status" header="Статус">
+          <Column field="status" header="Статус" sortable style="min-width: 12rem">
             <template #body="{ data }">
               <Tag :value="data.status" :severity="severityForStatus(data.status)" />
             </template>
           </Column>
 
-          <Column field="latency_ms" header="Latency">
+          <Column field="latency_ms" header="Latency" sortable style="min-width: 9rem">
             <template #body="{ data }">
               {{ data.latency_ms ?? '-' }}
             </template>
           </Column>
 
-          <Column header="Токены">
+          <Column header="Токены" style="min-width: 9rem">
             <template #body="{ data }">
-              <span>{{ data.input_tokens ?? '-' }} / {{ data.output_tokens ?? '-' }}</span>
+              {{ data.input_tokens ?? '-' }} / {{ data.output_tokens ?? '-' }}
             </template>
           </Column>
 
-          <Column header="">
+          <Column :exportable="false" style="min-width: 5rem">
             <template #body="{ data }">
               <Button
-                label="Детали"
-                size="small"
-                text
-                icon="pi pi-arrow-right"
+                icon="pi pi-eye"
+                rounded
+                outlined
+                severity="secondary"
+                aria-label="Детали"
                 @click="openDetails(data.id)"
               />
             </template>
           </Column>
         </DataTable>
-      </template>
-    </Card>
-  </section>
+      </div>
+    </div>
+  </div>
 </template>
-
-<style scoped>
-.page-grid {
-  display: grid;
-}
-
-.actions-row {
-  display: flex;
-  justify-content: flex-end;
-  margin-bottom: 1rem;
-}
-
-.loading-box {
-  min-height: 220px;
-  display: grid;
-  place-items: center;
-}
-</style>

@@ -22,6 +22,10 @@ use crate::{
     usecases::generate::{GenerateService, ServiceError},
 };
 
+const HEALTHCHECK_DESCRIPTION: &str = r#"Проверяет, что HTTP-сервис запущен и способен ответить.
+
+Это shallow healthcheck текущего процесса. Он не проверяет PostgreSQL, provider routes, наличие API keys и доступность upstream AI providers."#;
+
 #[derive(Clone)]
 pub struct AppState {
     pub generate_service: Arc<GenerateService>,
@@ -59,8 +63,18 @@ pub fn build_app(state: AppState) -> Router {
     get,
     path = "/health",
     tag = "health",
+    operation_id = "healthcheck",
+    summary = "Проверить доступность HTTP-сервиса",
+    description = HEALTHCHECK_DESCRIPTION,
     responses(
-        (status = 200, description = "Service is available", body = HealthResponseDto)
+        (
+            status = 200,
+            description = "HTTP-сервис отвечает.",
+            body = HealthResponseDto,
+            example = json!({
+                "status": "ok"
+            })
+        )
     )
 )]
 pub async fn healthcheck() -> Json<HealthResponseDto> {

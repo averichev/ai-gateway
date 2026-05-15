@@ -9,7 +9,10 @@ use crate::{
     app::{AppState, build_app},
     config::AppConfig,
     providers::{OpenAiCompatibleProvider, ProviderRegistry},
-    repositories::{PostgresRequestsRepository, PostgresRoutesRepository, seed_defaults},
+    repositories::{
+        PostgresAuthRepository, PostgresRequestsRepository, PostgresRoutesRepository, seed_defaults,
+    },
+    security::SecretCrypto,
     usecases::generate::GenerateService,
 };
 
@@ -25,7 +28,9 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     sqlx::migrate!("./migrations").run(&pool).await?;
     seed_defaults(&pool, &config).await?;
+    let secret_crypto = SecretCrypto::from_base64(&config.gateway_master_key)?;
 
+    let auth_repo = Arc::new(PostgresAuthRepository::new(pool.clone()));
     let routes_repo = Arc::new(PostgresRoutesRepository::new(pool.clone()));
     let requests_repo = Arc::new(PostgresRequestsRepository::new(pool));
 
@@ -34,14 +39,17 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         routes_repo.clone(),
         requests_repo.clone(),
         provider_registry,
+        secret_crypto.clone(),
         config.request_preview_chars,
         config.response_preview_chars,
     ));
 
     let state = AppState {
         generate_service,
+        auth_repo,
         routes_repo,
         requests_repo,
+        secret_crypto,
         admin_dist_dir: config.admin_dist_dir.clone(),
     };
 

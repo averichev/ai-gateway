@@ -61,12 +61,13 @@
 
 Gateway:
 
-1. ищет `smart-default` в `model_routes`;
-2. получает связанный provider из `providers`;
-3. читает API key из env по `api_key_env`;
-4. вызывает upstream API;
-5. сохраняет запись в `requests`;
-6. возвращает нормализованный ответ.
+1. определяет tenant по gateway client token;
+2. ищет `smart-default` в tenant-local `model_routes`;
+3. получает связанный provider из tenant-local `providers`;
+4. расшифровывает provider API key из `provider_secrets`;
+5. вызывает upstream API;
+6. сохраняет запись в `requests` с `tenant_id` и `gateway_client_id`;
+7. возвращает нормализованный ответ.
 
 ## Как запустить
 
@@ -81,7 +82,7 @@ docker build -t ai-gateway .
 Запустить:
 
 ```bash
-docker run --rm -p 8080:8080 -e OPENAI_API_KEY=your-key ai-gateway
+docker run --rm -p 8080:8080 --env-file .env ai-gateway
 ```
 
 После старта:
@@ -111,12 +112,11 @@ make docker-run IMAGE=ghcr.io/<username>/ai-gateway TAG=v0.1.0 ENV_FILE=.env POR
 
 ### Важные env-переменные
 
-- `OPENAI_API_KEY`
 - `DATABASE_URL`
+- `GATEWAY_MASTER_KEY`
 - `DEFAULT_PROVIDER_CODE`
 - `DEFAULT_PROVIDER_KIND`
 - `DEFAULT_PROVIDER_BASE_URL`
-- `DEFAULT_PROVIDER_API_KEY_ENV`
 - `DEFAULT_MODEL_ALIAS`
 - `DEFAULT_EXTERNAL_MODEL`
 
@@ -133,17 +133,18 @@ make docker-run IMAGE=ghcr.io/<username>/ai-gateway TAG=v0.1.0 ENV_FILE=.env POR
 
 1. добавить запись в `providers`;
 2. указать `kind`, который понимает registry;
-3. указать `api_key_env`, из которого gateway возьмёт секрет.
+3. создать provider в нужном tenant через admin UI/API;
+4. сохранить API key как encrypted provider secret.
 
 ## Как добавить новый alias
 
-Достаточно добавить запись в `model_routes`.
+Достаточно добавить tenant-local запись в `model_routes`.
 
 Пример:
 
 ```sql
-INSERT INTO model_routes (alias, provider_code, external_model, is_enabled)
-VALUES ('reasoning-default', 'openai', 'o4-mini', TRUE);
+INSERT INTO model_routes (tenant_id, alias, provider_code, external_model, is_enabled)
+VALUES ('00000000-0000-0000-0000-000000000000', 'reasoning-default', 'openai', 'o4-mini', TRUE);
 ```
 
 ## Ограничения текущей версии
@@ -152,4 +153,4 @@ VALUES ('reasoning-default', 'openai', 'o4-mini', TRUE);
 - история хранит только preview, а не полный prompt/response;
 - route resolution пока работает только для enabled-конфигураций;
 - retries и fallback отсутствуют;
-- UI предназначен для наблюдения и ручной проверки маршрута. В smoke-test можно указать API key разово; постоянные provider secrets по-прежнему задаются через env, а не через БД.
+- UI покрывает setup/login, tenants, gateway clients, providers, model routes, request history и smoke-test.

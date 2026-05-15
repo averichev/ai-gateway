@@ -14,7 +14,7 @@
 
 - Linux VPS;
 - публичный Docker image;
-- `OPENAI_API_KEY` или ключ совместимого relay/provider;
+- `GATEWAY_MASTER_KEY` для encrypted provider secrets;
 - желательно домен и reverse proxy перед сервисом.
 
 Важно:
@@ -106,7 +106,7 @@ agctl image show
 
 Базовый шаблон уже создаётся через `agctl init`.
 
-Минимум нужно заменить placeholder в `OPENAI_API_KEY`.
+Минимум нужно заменить placeholder в `GATEWAY_MASTER_KEY`. Provider API keys после первого входа сохраняются через admin UI в encrypted-at-rest storage.
 
 Можно отредактировать файл вручную:
 
@@ -117,7 +117,7 @@ nano /opt/ai-gateway/.env
 Или менять значения точечно:
 
 ```bash
-agctl env set OPENAI_API_KEY sk-xxxx
+agctl env set GATEWAY_MASTER_KEY '<base64-32-byte-key>'
 agctl env set DEFAULT_PROVIDER_BASE_URL https://api.openai.com/v1
 ```
 

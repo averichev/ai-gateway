@@ -236,11 +236,11 @@ mod tests {
 
         let provider = OpenAiCompatibleProvider::new().unwrap();
         let route = ResolvedRouteRecord {
+            provider_id: uuid::Uuid::new_v4(),
             external_model: "external-test-model".to_owned(),
             provider_code: "mock-provider".to_owned(),
             provider_kind: "openai-compatible".to_owned(),
             provider_base_url: format!("http://{address}"),
-            provider_api_key_env: "TEST_API_KEY".to_owned(),
             provider_timeout_ms: 1_000,
         };
         let request = GenerateRequestDto {

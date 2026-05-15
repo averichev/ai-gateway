@@ -1,13 +1,15 @@
-use axum::{Json, extract::State};
+use axum::{Json, extract::State, http::HeaderMap};
 
 use crate::{
     app::{AppHttpError, AppState},
     domain::{GenerateRequestDto, GenerateResponseDto},
+    http::auth::bearer_token,
+    security::token_hash,
 };
 
 const GENERATE_DESCRIPTION: &str = r#"Основной клиентский endpoint gateway.
 
-Метод принимает внутренний alias модели и список сообщений, затем сам выбирает provider через таблицы `model_routes` и `providers`. Клиент не передает внешний model id, provider URL или API key.
+Метод принимает внутренний alias модели и список сообщений, затем определяет tenant по `Authorization: Bearer <gateway-client-token>` и выбирает provider через tenant-local таблицы `model_routes` и `providers`. Клиент не передает внешний model id, provider URL или provider API key.
 
 Контракт специально остается provider-agnostic: OpenAI-compatible, Anthropic-native и другие внешние форматы должны жить внутри отдельных `ProviderAdapter`, а не в этом request/response.
 
@@ -79,13 +81,13 @@ const GENERATE_DESCRIPTION: &str = r#"Основной клиентский endp
         ),
         (
             status = 500,
-            description = "Ошибка конфигурации gateway или хранилища: не удалось прочитать routes/providers, отсутствует env с API key, либо provider kind не зарегистрирован.",
+            description = "Ошибка конфигурации gateway или хранилища: не удалось прочитать routes/providers, отсутствует encrypted provider secret, либо provider kind не зарегистрирован.",
             body = crate::domain::ErrorResponseDto,
             example = json!({
                 "request_id": "req_4d4d6f4df77f4c1e8260f60f052f63cc",
                 "error": {
                     "code": "gateway_misconfigured",
-                    "message": "Gateway не настроен: отсутствует env `OPENAI_API_KEY`"
+                    "message": "Gateway не настроен: отсутствует provider secret для `openai`"
                 }
             })
         ),
@@ -117,9 +119,24 @@ const GENERATE_DESCRIPTION: &str = r#"Основной клиентский endp
 )]
 pub async fn handle_generate(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(payload): Json<GenerateRequestDto>,
 ) -> Result<Json<GenerateResponseDto>, AppHttpError> {
-    let response = state.generate_service.generate(payload).await?;
+    let token = bearer_token(&headers)?;
+    let client = state
+        .auth_repo
+        .authenticate_gateway_client(&token_hash(&token))
+        .await?
+        .ok_or_else(|| AppHttpError::unauthorized("Неизвестный gateway client token"))?;
+
+    if !client.is_enabled {
+        return Err(AppHttpError::forbidden("Gateway client token отключен"));
+    }
+
+    let response = state
+        .generate_service
+        .generate_for_client(payload, client.tenant_id, client.id)
+        .await?;
 
     Ok(Json(response))
 }

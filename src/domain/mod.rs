@@ -42,12 +42,11 @@ pub struct GenerateRequestDto {
 
 /// Admin smoke-test request.
 ///
-/// The shape is the same as `GenerateRequestDto`, with an optional one-time
-/// API key override for manual provider diagnostics from the admin UI.
+/// The shape is the same as `GenerateRequestDto`. Provider credentials are
+/// resolved from the selected tenant's encrypted provider secret.
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 #[schema(example = json!({
     "model": "smart-default",
-    "api_key": "sk-test-placeholder",
     "messages": [
         { "role": "user", "content": "Проверь маршрут и ответь одним предложением." }
     ],
@@ -60,14 +59,6 @@ pub struct AdminGenerateRequestDto {
     /// Flattened generation request fields.
     #[serde(flatten)]
     pub request: GenerateRequestDto,
-    /// One-time upstream API key override.
-    ///
-    /// If omitted, gateway reads the key from the environment variable named in
-    /// `providers.api_key_env`. The override is used only for this request and
-    /// is not saved to PostgreSQL.
-    #[schema(example = "sk-test-placeholder", write_only)]
-    #[serde(default)]
-    pub api_key: Option<String>,
 }
 
 /// One message in the generation conversation.
@@ -214,10 +205,11 @@ pub struct HealthResponseDto {
 #[derive(Debug, Clone, Serialize, FromRow)]
 pub struct ProviderConfigRecord {
     pub id: uuid::Uuid,
+    pub tenant_id: uuid::Uuid,
     pub code: String,
     pub kind: String,
     pub base_url: String,
-    pub api_key_env: String,
+    pub api_key_configured: bool,
     pub is_enabled: bool,
     pub timeout_ms: i32,
     pub created_at: DateTime<Utc>,
@@ -227,6 +219,7 @@ pub struct ProviderConfigRecord {
 #[derive(Debug, Clone, Serialize, FromRow)]
 pub struct ModelRouteRecord {
     pub id: uuid::Uuid,
+    pub tenant_id: uuid::Uuid,
     pub alias: String,
     pub provider_code: String,
     pub external_model: String,
@@ -237,17 +230,20 @@ pub struct ModelRouteRecord {
 
 #[derive(Debug, Clone, FromRow)]
 pub struct ResolvedRouteRecord {
+    pub provider_id: uuid::Uuid,
     pub external_model: String,
     pub provider_code: String,
     pub provider_kind: String,
     pub provider_base_url: String,
-    pub provider_api_key_env: String,
     pub provider_timeout_ms: i32,
 }
 
 #[derive(Debug, Clone, Serialize, FromRow)]
 pub struct RequestLogRecord {
     pub id: String,
+    pub tenant_id: uuid::Uuid,
+    pub gateway_client_id: Option<uuid::Uuid>,
+    pub gateway_client_name: Option<String>,
     pub created_at: DateTime<Utc>,
     pub model_alias: String,
     pub provider_code: Option<String>,
@@ -264,6 +260,8 @@ pub struct RequestLogRecord {
 #[derive(Debug, Clone)]
 pub struct RequestLogInsert {
     pub id: String,
+    pub tenant_id: uuid::Uuid,
+    pub gateway_client_id: Option<uuid::Uuid>,
     pub model_alias: String,
     pub provider_code: Option<String>,
     pub external_model: Option<String>,
@@ -283,12 +281,232 @@ pub struct ProviderGenerateResult {
     pub usage: Option<TokenUsageDto>,
 }
 
+#[derive(Debug, Clone, FromRow)]
+pub struct ProviderSecretRecord {
+    pub ciphertext: Vec<u8>,
+    pub nonce: Vec<u8>,
+    pub algorithm: String,
+    pub key_version: i32,
+}
+
+#[derive(Debug, Clone, FromRow)]
+pub struct UserRecord {
+    pub id: uuid::Uuid,
+    pub email: String,
+    pub password_hash: String,
+    pub global_role: String,
+    pub is_enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, FromRow)]
+pub struct AdminUserRecord {
+    pub id: uuid::Uuid,
+    pub email: String,
+    pub global_role: String,
+    pub is_enabled: bool,
+    pub tenant_count: i64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, FromRow)]
+pub struct TenantRecord {
+    pub id: uuid::Uuid,
+    pub name: String,
+    pub slug: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, FromRow)]
+pub struct TenantAccessRecord {
+    pub tenant_id: uuid::Uuid,
+    pub role: String,
+}
+
+#[derive(Debug, Clone, FromRow)]
+pub struct SessionRecord {
+    pub user_id: uuid::Uuid,
+    pub email: String,
+    pub global_role: String,
+    pub is_enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, FromRow)]
+pub struct GatewayClientRecord {
+    pub id: uuid::Uuid,
+    pub tenant_id: uuid::Uuid,
+    pub name: String,
+    pub token_prefix: String,
+    pub is_enabled: bool,
+    pub last_used_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, FromRow)]
+pub struct GatewayClientAuthRecord {
+    pub id: uuid::Uuid,
+    pub tenant_id: uuid::Uuid,
+    pub is_enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct BootstrapStatusDto {
+    pub has_users: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct BootstrapRegisterRequestDto {
+    #[schema(example = "owner@example.com")]
+    pub email: String,
+    #[schema(example = "change-me-strong-password", write_only)]
+    pub password: String,
+    #[schema(example = "Default tenant")]
+    #[serde(default)]
+    pub tenant_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct LoginRequestDto {
+    #[schema(example = "owner@example.com")]
+    pub email: String,
+    #[schema(example = "change-me-strong-password", write_only)]
+    pub password: String,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct AuthResponseDto {
+    pub token: String,
+    pub user: CurrentUserDto,
+    pub tenants: Vec<TenantDto>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct CurrentUserDto {
+    pub id: uuid::Uuid,
+    pub email: String,
+    pub global_role: String,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct TenantDto {
+    pub id: uuid::Uuid,
+    pub name: String,
+    pub slug: String,
+    pub role: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct CreateTenantRequestDto {
+    #[schema(example = "Factum Production")]
+    pub name: String,
+    #[schema(example = "factum-production")]
+    #[serde(default)]
+    pub slug: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct CreateGatewayClientRequestDto {
+    #[schema(example = "factum-backend-prod")]
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct GatewayClientDto {
+    pub id: uuid::Uuid,
+    pub tenant_id: uuid::Uuid,
+    pub name: String,
+    pub token_prefix: String,
+    pub is_enabled: bool,
+    pub last_used_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct CreatedGatewayClientDto {
+    #[serde(flatten)]
+    pub client: GatewayClientDto,
+    pub token: String,
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct SaveProviderRequestDto {
+    #[schema(example = "openai")]
+    pub code: String,
+    #[schema(example = "openai-compatible")]
+    pub kind: String,
+    #[schema(example = "https://api.openai.com/v1")]
+    pub base_url: String,
+    #[schema(example = true)]
+    #[serde(default = "default_enabled")]
+    pub is_enabled: bool,
+    #[schema(example = 60000)]
+    #[serde(default = "default_provider_timeout_ms")]
+    pub timeout_ms: i32,
+    #[schema(example = "sk-test-placeholder", write_only)]
+    #[serde(default)]
+    pub api_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct SaveProviderSecretRequestDto {
+    #[schema(example = "sk-test-placeholder", write_only)]
+    pub api_key: String,
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct SaveModelRouteRequestDto {
+    #[schema(example = "smart-default")]
+    pub alias: String,
+    #[schema(example = "openai")]
+    pub provider_code: String,
+    #[schema(example = "gpt-4.1-mini")]
+    pub external_model: String,
+    #[schema(example = true)]
+    #[serde(default = "default_enabled")]
+    pub is_enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct AdminUserDto {
+    pub id: uuid::Uuid,
+    pub email: String,
+    pub global_role: String,
+    pub is_enabled: bool,
+    pub tenant_count: i64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct CreateUserRequestDto {
+    #[schema(example = "admin@example.com")]
+    pub email: String,
+    #[schema(example = "change-me-strong-password", write_only)]
+    pub password: String,
+    #[serde(default)]
+    pub tenant_id: Option<uuid::Uuid>,
+    #[schema(example = "viewer")]
+    #[serde(default)]
+    pub tenant_role: Option<String>,
+}
+
 /// One item in the admin request history list.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct RequestListItemDto {
     /// Gateway request id.
     #[schema(example = "req_4d4d6f4df77f4c1e8260f60f052f63cc")]
     pub id: String,
+    /// Tenant that owns the request.
+    pub tenant_id: uuid::Uuid,
+    /// Machine client that authenticated the request, if applicable.
+    pub gateway_client_id: Option<uuid::Uuid>,
+    /// Machine client display name, if available.
+    pub gateway_client_name: Option<String>,
     /// Request creation time in UTC.
     #[schema(example = "2026-04-17T18:20:00Z")]
     pub created_at: DateTime<Utc>,
@@ -329,6 +547,12 @@ pub struct RequestDetailsDto {
     /// Gateway request id.
     #[schema(example = "req_4d4d6f4df77f4c1e8260f60f052f63cc")]
     pub id: String,
+    /// Tenant that owns the request.
+    pub tenant_id: uuid::Uuid,
+    /// Machine client that authenticated the request, if applicable.
+    pub gateway_client_id: Option<uuid::Uuid>,
+    /// Machine client display name, if available.
+    pub gateway_client_name: Option<String>,
     /// Request creation time in UTC.
     #[schema(example = "2026-04-17T18:20:00Z")]
     pub created_at: DateTime<Utc>,
@@ -367,10 +591,12 @@ pub struct RequestDetailsDto {
 
 /// Provider configuration visible to the admin API.
 ///
-/// Secrets are not stored in PostgreSQL. `api_key_env` contains only the name of
-/// the environment variable that must hold the provider API key at runtime.
+/// Secrets are stored separately in `provider_secrets` as encrypted-at-rest
+/// ciphertext. The plaintext API key is never returned by API responses.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ProviderDto {
+    pub id: uuid::Uuid,
+    pub tenant_id: uuid::Uuid,
     /// Stable provider code referenced by model routes.
     #[schema(example = "openai")]
     pub code: String,
@@ -385,9 +611,9 @@ pub struct ProviderDto {
     /// `POST {base_url}/chat/completions`.
     #[schema(example = "https://api.openai.com/v1")]
     pub base_url: String,
-    /// Name of the environment variable containing the provider API key.
-    #[schema(example = "OPENAI_API_KEY")]
-    pub api_key_env: String,
+    /// Whether encrypted provider secret exists for this provider.
+    #[schema(example = true)]
+    pub api_key_configured: bool,
     /// Whether this provider can be used by model routing.
     #[schema(example = true)]
     pub is_enabled: bool,
@@ -402,6 +628,8 @@ pub struct ProviderDto {
 /// Model alias route visible to the admin API.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ModelRouteDto {
+    pub id: uuid::Uuid,
+    pub tenant_id: uuid::Uuid,
     /// Internal model alias accepted by `POST /api/v1/generate`.
     #[schema(example = "smart-default")]
     pub alias: String,
@@ -423,6 +651,9 @@ impl From<RequestLogRecord> for RequestListItemDto {
     fn from(value: RequestLogRecord) -> Self {
         Self {
             id: value.id,
+            tenant_id: value.tenant_id,
+            gateway_client_id: value.gateway_client_id,
+            gateway_client_name: value.gateway_client_name,
             created_at: value.created_at,
             model_alias: value.model_alias,
             provider_code: value.provider_code,
@@ -440,6 +671,9 @@ impl From<RequestLogRecord> for RequestDetailsDto {
     fn from(value: RequestLogRecord) -> Self {
         Self {
             id: value.id,
+            tenant_id: value.tenant_id,
+            gateway_client_id: value.gateway_client_id,
+            gateway_client_name: value.gateway_client_name,
             created_at: value.created_at,
             model_alias: value.model_alias,
             provider_code: value.provider_code,
@@ -458,10 +692,12 @@ impl From<RequestLogRecord> for RequestDetailsDto {
 impl From<ProviderConfigRecord> for ProviderDto {
     fn from(value: ProviderConfigRecord) -> Self {
         Self {
+            id: value.id,
+            tenant_id: value.tenant_id,
             code: value.code,
             kind: value.kind,
             base_url: value.base_url,
-            api_key_env: value.api_key_env,
+            api_key_configured: value.api_key_configured,
             is_enabled: value.is_enabled,
             timeout_ms: value.timeout_ms,
             updated_at: value.updated_at,
@@ -472,6 +708,8 @@ impl From<ProviderConfigRecord> for ProviderDto {
 impl From<ModelRouteRecord> for ModelRouteDto {
     fn from(value: ModelRouteRecord) -> Self {
         Self {
+            id: value.id,
+            tenant_id: value.tenant_id,
             alias: value.alias,
             provider_code: value.provider_code,
             external_model: value.external_model,
@@ -479,4 +717,54 @@ impl From<ModelRouteRecord> for ModelRouteDto {
             updated_at: value.updated_at,
         }
     }
+}
+
+impl TenantDto {
+    pub fn from_record_with_role(value: TenantRecord, role: impl Into<String>) -> Self {
+        Self {
+            id: value.id,
+            name: value.name,
+            slug: value.slug,
+            role: role.into(),
+            created_at: value.created_at,
+            updated_at: value.updated_at,
+        }
+    }
+}
+
+impl From<GatewayClientRecord> for GatewayClientDto {
+    fn from(value: GatewayClientRecord) -> Self {
+        Self {
+            id: value.id,
+            tenant_id: value.tenant_id,
+            name: value.name,
+            token_prefix: value.token_prefix,
+            is_enabled: value.is_enabled,
+            last_used_at: value.last_used_at,
+            created_at: value.created_at,
+            updated_at: value.updated_at,
+        }
+    }
+}
+
+impl From<AdminUserRecord> for AdminUserDto {
+    fn from(value: AdminUserRecord) -> Self {
+        Self {
+            id: value.id,
+            email: value.email,
+            global_role: value.global_role,
+            is_enabled: value.is_enabled,
+            tenant_count: value.tenant_count,
+            created_at: value.created_at,
+            updated_at: value.updated_at,
+        }
+    }
+}
+
+fn default_enabled() -> bool {
+    true
+}
+
+fn default_provider_timeout_ms() -> i32 {
+    60_000
 }

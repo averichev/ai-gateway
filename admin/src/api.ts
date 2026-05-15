@@ -1,7 +1,47 @@
 import axios from 'axios'
 
+const AUTH_TOKEN_KEY = 'ai-gateway.admin.token'
+
+export interface BootstrapStatus {
+  has_users: boolean
+}
+
+export interface CurrentUser {
+  id: string
+  email: string
+  global_role: 'owner' | 'user'
+}
+
+export interface TenantItem {
+  id: string
+  name: string
+  slug: string
+  role: 'owner' | 'tenant_admin' | 'viewer'
+  created_at: string
+  updated_at: string
+}
+
+export interface AdminUserItem {
+  id: string
+  email: string
+  global_role: 'owner' | 'user'
+  is_enabled: boolean
+  tenant_count: number
+  created_at: string
+  updated_at: string
+}
+
+export interface AuthResponse {
+  token: string
+  user: CurrentUser
+  tenants: TenantItem[]
+}
+
 export interface RequestListItem {
   id: string
+  tenant_id: string
+  gateway_client_id: string | null
+  gateway_client_name: string | null
   created_at: string
   model_alias: string
   provider_code: string | null
@@ -19,21 +59,40 @@ export interface RequestDetails extends RequestListItem {
 }
 
 export interface ProviderItem {
+  id: string
+  tenant_id: string
   code: string
   kind: string
   base_url: string
-  api_key_env: string
+  api_key_configured: boolean
   is_enabled: boolean
   timeout_ms: number
   updated_at: string
 }
 
 export interface ModelRouteItem {
+  id: string
+  tenant_id: string
   alias: string
   provider_code: string
   external_model: string
   is_enabled: boolean
   updated_at: string
+}
+
+export interface GatewayClientItem {
+  id: string
+  tenant_id: string
+  name: string
+  token_prefix: string
+  is_enabled: boolean
+  last_used_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface CreatedGatewayClient extends GatewayClientItem {
+  token: string
 }
 
 export interface GenerateMessage {
@@ -44,7 +103,6 @@ export interface GenerateMessage {
 export interface GenerateRequest {
   model: string
   messages: GenerateMessage[]
-  api_key?: string
   options?: {
     temperature?: number
     max_tokens?: number
@@ -71,36 +129,181 @@ export interface ErrorResponse {
   }
 }
 
-const api = axios.create({
+const authApi = axios.create({
+  baseURL: '/api/auth',
+  timeout: 15_000,
+})
+
+const adminApi = axios.create({
   baseURL: '/api/admin',
   timeout: 15_000,
 })
 
-export async function fetchRequests(limit = 100): Promise<RequestListItem[]> {
-  const { data } = await api.get<RequestListItem[]>('/requests', {
+adminApi.interceptors.request.use((config) => {
+  const token = localStorage.getItem(AUTH_TOKEN_KEY)
+
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`
+  }
+
+  return config
+})
+
+authApi.interceptors.request.use((config) => {
+  const token = localStorage.getItem(AUTH_TOKEN_KEY)
+
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`
+  }
+
+  return config
+})
+
+export function persistAuthToken(token: string | null) {
+  if (token) {
+    localStorage.setItem(AUTH_TOKEN_KEY, token)
+  } else {
+    localStorage.removeItem(AUTH_TOKEN_KEY)
+  }
+}
+
+export function readAuthToken(): string | null {
+  return localStorage.getItem(AUTH_TOKEN_KEY)
+}
+
+export async function fetchBootstrapStatus(): Promise<BootstrapStatus> {
+  const { data } = await authApi.get<BootstrapStatus>('/bootstrap')
+  return data
+}
+
+export async function bootstrapRegister(payload: {
+  email: string
+  password: string
+  tenant_name?: string
+}): Promise<AuthResponse> {
+  const { data } = await authApi.post<AuthResponse>('/register', payload)
+  return data
+}
+
+export async function login(payload: { email: string; password: string }): Promise<AuthResponse> {
+  const { data } = await authApi.post<AuthResponse>('/login', payload)
+  return data
+}
+
+export async function fetchMe(): Promise<AuthResponse> {
+  const { data } = await authApi.get<AuthResponse>('/me')
+  return data
+}
+
+export async function fetchTenants(): Promise<TenantItem[]> {
+  const { data } = await adminApi.get<TenantItem[]>('/tenants')
+  return data
+}
+
+export async function createTenant(payload: { name: string; slug?: string }): Promise<TenantItem> {
+  const { data } = await adminApi.post<TenantItem>('/tenants', payload)
+  return data
+}
+
+export async function fetchUsers(): Promise<AdminUserItem[]> {
+  const { data } = await adminApi.get<AdminUserItem[]>('/users')
+  return data
+}
+
+export async function createUser(payload: {
+  email: string
+  password: string
+  tenant_id?: string
+  tenant_role?: 'tenant_admin' | 'viewer'
+}): Promise<AdminUserItem> {
+  const { data } = await adminApi.post<AdminUserItem>('/users', payload)
+  return data
+}
+
+export async function fetchRequests(tenantId: string, limit = 100): Promise<RequestListItem[]> {
+  const { data } = await adminApi.get<RequestListItem[]>(`/tenants/${tenantId}/requests`, {
     params: { limit },
   })
 
   return data
 }
 
-export async function fetchRequestDetails(id: string): Promise<RequestDetails> {
-  const { data } = await api.get<RequestDetails>(`/requests/${id}`)
+export async function fetchRequestDetails(tenantId: string, id: string): Promise<RequestDetails> {
+  const { data } = await adminApi.get<RequestDetails>(`/tenants/${tenantId}/requests/${id}`)
   return data
 }
 
-export async function fetchProviders(): Promise<ProviderItem[]> {
-  const { data } = await api.get<ProviderItem[]>('/providers')
+export async function fetchProviders(tenantId: string): Promise<ProviderItem[]> {
+  const { data } = await adminApi.get<ProviderItem[]>(`/tenants/${tenantId}/providers`)
   return data
 }
 
-export async function fetchModelRoutes(): Promise<ModelRouteItem[]> {
-  const { data } = await api.get<ModelRouteItem[]>('/model-routes')
+export async function saveProvider(
+  tenantId: string,
+  payload: {
+    code: string
+    kind: string
+    base_url: string
+    is_enabled: boolean
+    timeout_ms: number
+    api_key?: string
+  },
+): Promise<ProviderItem> {
+  const { data } = await adminApi.post<ProviderItem>(`/tenants/${tenantId}/providers`, payload)
   return data
 }
 
-export async function generateText(payload: GenerateRequest): Promise<GenerateResponse> {
-  const { data } = await api.post<GenerateResponse>('/generate', payload, {
+export async function saveProviderSecret(
+  tenantId: string,
+  providerId: string,
+  apiKey: string,
+): Promise<ProviderItem> {
+  const { data } = await adminApi.post<ProviderItem>(
+    `/tenants/${tenantId}/providers/${providerId}/secret`,
+    { api_key: apiKey },
+  )
+  return data
+}
+
+export async function fetchModelRoutes(tenantId: string): Promise<ModelRouteItem[]> {
+  const { data } = await adminApi.get<ModelRouteItem[]>(`/tenants/${tenantId}/model-routes`)
+  return data
+}
+
+export async function saveModelRoute(
+  tenantId: string,
+  payload: {
+    alias: string
+    provider_code: string
+    external_model: string
+    is_enabled: boolean
+  },
+): Promise<ModelRouteItem> {
+  const { data } = await adminApi.post<ModelRouteItem>(`/tenants/${tenantId}/model-routes`, payload)
+  return data
+}
+
+export async function fetchGatewayClients(tenantId: string): Promise<GatewayClientItem[]> {
+  const { data } = await adminApi.get<GatewayClientItem[]>(`/tenants/${tenantId}/gateway-clients`)
+  return data
+}
+
+export async function createGatewayClient(
+  tenantId: string,
+  payload: { name: string },
+): Promise<CreatedGatewayClient> {
+  const { data } = await adminApi.post<CreatedGatewayClient>(
+    `/tenants/${tenantId}/gateway-clients`,
+    payload,
+  )
+  return data
+}
+
+export async function generateText(
+  tenantId: string,
+  payload: GenerateRequest,
+): Promise<GenerateResponse> {
+  const { data } = await adminApi.post<GenerateResponse>(`/tenants/${tenantId}/generate`, payload, {
     timeout: 120_000,
   })
   return data
@@ -114,7 +317,11 @@ export function formatApiError(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback
 }
 
-export function formatDateTime(value: string): string {
+export function formatDateTime(value: string | null): string {
+  if (!value) {
+    return '-'
+  }
+
   return new Intl.DateTimeFormat('ru-RU', {
     dateStyle: 'short',
     timeStyle: 'medium',

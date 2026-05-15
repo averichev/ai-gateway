@@ -6,5 +6,6 @@ pub mod http;
 pub mod openapi;
 pub mod providers;
 pub mod repositories;
+pub mod security;
 pub mod server;
 pub mod usecases;

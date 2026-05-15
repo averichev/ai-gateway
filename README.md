@@ -2,13 +2,14 @@
 
 `ai-gateway` - внутренний HTTP gateway для LLM-вызовов. Его задача - дать приложениям один стабильный URL и один внутренний контракт, а детали внешних AI-провайдеров оставить внутри gateway.
 
-Клиентское приложение отправляет запрос в gateway по alias модели, например `smart-default`. Gateway сам находит реальный provider, внешнюю модель, endpoint провайдера, API key из env, выполняет upstream-вызов и возвращает нормализованный ответ.
+Клиентское приложение отправляет запрос в gateway по alias модели, например `smart-default`, и передаёт `Authorization: Bearer <gateway-client-token>`. Gateway определяет tenant по hash machine token, находит tenant-local route/provider, расшифровывает provider secret и возвращает нормализованный ответ.
 
 Важно: текущий MVP не является прозрачной заменой OpenAI API, Anthropic API или Claude API. Сейчас публичный контракт gateway - собственный `POST /api/v1/generate`. Если цель - чтобы клиент мог указать URL gateway и слать запросы ровно как в OpenAI/Claude SDK, нужно отдельно добавить vendor-compatible endpoints вроде `/v1/chat/completions` и/или provider-specific compatibility layer.
 
 ## Зачем нужен
 
 - не размазывать API keys и provider-specific настройки по приложениям;
+- изолировать tenants: provider keys, model routes, machine tokens и request history;
 - переключать реальные модели через alias без изменений в клиентах;
 - хранить историю LLM-вызовов в одном месте;
 - иметь базовый admin UI для наблюдения, проверки маршрутов и диагностики;
@@ -21,11 +22,13 @@
 1. Клиент вызывает `POST /api/v1/generate`.
 2. В запросе указывает внутренний `model` alias.
 3. Gateway ищет alias в `model_routes`.
-4. Через `provider_code` получает provider-конфиг из `providers`.
-5. По `provider.kind` выбирает adapter.
-6. Adapter вызывает внешний AI API.
-7. Gateway сохраняет запись в `requests`.
-8. Клиент получает нормализованный response.
+4. Gateway определяет tenant по hash machine token.
+5. Через tenant-local `provider_code` получает provider-конфиг из `providers`.
+6. По `provider.kind` выбирает adapter.
+7. Gateway расшифровывает provider secret из `provider_secrets`.
+8. Adapter вызывает внешний AI API.
+9. Gateway сохраняет tenant/client-scoped запись в `requests`.
+10. Клиент получает нормализованный response.
 
 Сейчас реализован один provider adapter:
 
@@ -37,6 +40,9 @@
 
 - Rust backend на `axum`;
 - PostgreSQL-хранилище для providers, model routes и истории запросов;
+- users/tenants/tenant_members и session-based admin auth;
+- gateway clients с machine tokens для Factum backend;
+- encrypted-at-rest provider secrets через `GATEWAY_MASTER_KEY`;
 - `POST /api/v1/generate` для text generation;
 - admin API;
 - Swagger UI;
@@ -51,6 +57,7 @@
 
 ```http
 POST /api/v1/generate
+Authorization: Bearer <gateway-client-token>
 ```
 
 Пример запроса:
@@ -101,13 +108,16 @@ http://localhost:8080/
 
 В текущей версии UI умеет:
 
+- показывать setup registration при пустой таблице пользователей;
+- выполнять login;
+- создавать users через owner-only admin UI;
+- создавать tenants;
+- создавать gateway client tokens;
 - показывать последние запросы;
 - открывать детали запроса;
-- показывать providers;
-- показывать model routes;
+- создавать и обновлять providers, включая encrypted API key;
+- создавать и обновлять model routes;
 - выполнять ручной smoke-test генерации.
-
-Редактирование providers/routes через UI пока не реализовано.
 
 ## Конфигурация
 
@@ -116,18 +126,17 @@ http://localhost:8080/
 - `APP_HOST`
 - `APP_PORT`
 - `DATABASE_URL`
+- `GATEWAY_MASTER_KEY` - base64-encoded 32-byte key для AES-256-GCM provider secrets
 - `DEFAULT_PROVIDER_CODE`
 - `DEFAULT_PROVIDER_KIND`
 - `DEFAULT_PROVIDER_BASE_URL`
-- `DEFAULT_PROVIDER_API_KEY_ENV`
 - `DEFAULT_PROVIDER_TIMEOUT_MS`
 - `DEFAULT_MODEL_ALIAS`
 - `DEFAULT_EXTERNAL_MODEL`
-- `OPENAI_API_KEY`
 
 Пример значений находится в [.env.example](.env.example).
 
-При старте приложение применяет migrations и делает upsert default provider/model route из env. Это позволяет поднять рабочий gateway без ручного заполнения БД.
+При старте приложение применяет migrations и делает upsert default provider/model route в tenant `default`. Provider API key задаётся через admin UI и хранится только encrypted-at-rest.
 
 ## Запуск
 
@@ -154,11 +163,12 @@ docker run --rm -p 8080:8080 --env-file .env ai-gateway
 
 Схема PostgreSQL состоит из трех основных таблиц:
 
-- `providers` - provider-конфиги без секретов;
-- `model_routes` - mapping внутреннего alias на provider и external model;
-- `requests` - история вызовов и ошибок.
-
-Секреты не сохраняются в БД. В `providers.api_key_env` хранится только имя env-переменной, из которой gateway берет ключ во время запроса.
+- `users`, `tenants`, `tenant_members` - admin auth и tenant access;
+- `gateway_clients` - machine clients, в БД только token hash;
+- `providers` - tenant-local provider-конфиги без plaintext secrets;
+- `provider_secrets` - encrypted-at-rest provider API keys;
+- `model_routes` - tenant-local mapping внутреннего alias на provider и external model;
+- `requests` - tenant/client-scoped история вызовов и ошибок.
 
 Подробнее:
 
@@ -176,7 +186,7 @@ docker run --rm -p 8080:8080 --env-file .env ai-gateway
 - image generation;
 - Anthropic-native adapter;
 - retries и fallback orchestration;
-- auth, roles, quotas и billing;
+- quotas и billing;
 - полноценный audit trail изменения маршрутов;
 - редактирование конфигурации через UI;
 - vendor-compatible endpoints для прямого подключения OpenAI/Claude SDK.

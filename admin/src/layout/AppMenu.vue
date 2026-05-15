@@ -33,6 +33,21 @@ const model = ref<MenuSection[]>([
         icon: 'pi pi-fw pi-sitemap',
         to: '/model-routes',
       },
+      {
+        label: 'Gateway Clients',
+        icon: 'pi pi-fw pi-key',
+        to: '/gateway-clients',
+      },
+      {
+        label: 'Tenants',
+        icon: 'pi pi-fw pi-building',
+        to: '/tenants',
+      },
+      {
+        label: 'Users',
+        icon: 'pi pi-fw pi-users',
+        to: '/users',
+      },
     ],
   },
 ])

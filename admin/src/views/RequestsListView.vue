@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { FilterMatchMode } from '@primevue/core/api'
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import Button from 'primevue/button'
 import Column from 'primevue/column'
@@ -12,9 +12,11 @@ import Message from 'primevue/message'
 import Tag from 'primevue/tag'
 import Toolbar from 'primevue/toolbar'
 
-import { fetchRequests, formatDateTime, severityForStatus, type RequestListItem } from '../api'
+import { useAuth } from '../auth'
+import { fetchRequests, formatApiError, formatDateTime, severityForStatus, type RequestListItem } from '../api'
 
 const router = useRouter()
+const { activeTenantId } = useAuth()
 const loading = ref(true)
 const errorMessage = ref('')
 const items = ref<RequestListItem[]>([])
@@ -26,10 +28,16 @@ async function loadRequests() {
   loading.value = true
   errorMessage.value = ''
 
+  if (!activeTenantId.value) {
+    items.value = []
+    loading.value = false
+    return
+  }
+
   try {
-    items.value = await fetchRequests()
+    items.value = await fetchRequests(activeTenantId.value)
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : 'Не удалось загрузить список запросов'
+    errorMessage.value = formatApiError(error, 'Не удалось загрузить список запросов')
   } finally {
     loading.value = false
   }
@@ -40,6 +48,7 @@ function openDetails(id: string) {
 }
 
 onMounted(loadRequests)
+watch(activeTenantId, loadRequests)
 </script>
 
 <template>
@@ -50,7 +59,7 @@ onMounted(loadRequests)
           <template #start>
             <div>
               <h4 class="m-0">Запросы</h4>
-              <div class="text-muted mt-4">Последние вызовы gateway и итоговый маршрут</div>
+              <div class="text-muted mt-4">Последние вызовы выбранного tenant</div>
             </div>
           </template>
 
@@ -96,6 +105,11 @@ onMounted(loadRequests)
           </Column>
 
           <Column field="model_alias" header="Alias" sortable style="min-width: 10rem" />
+          <Column field="gateway_client_name" header="Client" sortable style="min-width: 12rem">
+            <template #body="{ data }">
+              {{ data.gateway_client_name ?? 'admin' }}
+            </template>
+          </Column>
           <Column field="provider_code" header="Provider" sortable style="min-width: 10rem" />
           <Column field="external_model" header="Модель" sortable style="min-width: 14rem" />
 

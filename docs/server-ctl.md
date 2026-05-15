@@ -106,7 +106,7 @@ agctl --config /srv/ai-gateway/ctl.toml init --app-dir /srv/ai-gateway
 Пример:
 
 ```bash
-agctl env set OPENAI_API_KEY sk-xxxx
+agctl env set GATEWAY_MASTER_KEY '<base64-32-byte-key>'
 ```
 
 ### `agctl env validate`
@@ -193,7 +193,7 @@ agctl doctor
 agctl docker ensure
 agctl init
 agctl image set ghcr.io/<username>/ai-gateway:v0.1.0
-agctl env set OPENAI_API_KEY sk-xxxx
+agctl env set GATEWAY_MASTER_KEY '<base64-32-byte-key>'
 agctl env validate
 agctl apply
 agctl status

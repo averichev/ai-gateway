@@ -1,4 +1,5 @@
 use sqlx::{PgPool, query_as};
+use uuid::Uuid;
 
 use crate::domain::{RequestLogInsert, RequestLogRecord};
 
@@ -19,6 +20,8 @@ impl PostgresRequestsRepository {
             r#"
             INSERT INTO requests (
                 id,
+                tenant_id,
+                gateway_client_id,
                 model_alias,
                 provider_code,
                 external_model,
@@ -30,10 +33,12 @@ impl PostgresRequestsRepository {
                 prompt_preview,
                 response_preview
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
             "#,
         )
         .bind(&request.id)
+        .bind(request.tenant_id)
+        .bind(request.gateway_client_id)
         .bind(&request.model_alias)
         .bind(&request.provider_code)
         .bind(&request.external_model)
@@ -52,28 +57,35 @@ impl PostgresRequestsRepository {
 
     pub async fn list_requests(
         &self,
+        tenant_id: Uuid,
         limit: i64,
     ) -> Result<Vec<RequestLogRecord>, RepositoryError> {
         let items = query_as::<_, RequestLogRecord>(
             r#"
             SELECT
-                id,
-                created_at,
-                model_alias,
-                provider_code,
-                external_model,
-                status,
-                latency_ms,
-                error_message,
-                input_tokens,
-                output_tokens,
-                prompt_preview,
-                response_preview
-            FROM requests
-            ORDER BY created_at DESC
-            LIMIT $1
+                r.id,
+                r.tenant_id,
+                r.gateway_client_id,
+                gc.name AS gateway_client_name,
+                r.created_at,
+                r.model_alias,
+                r.provider_code,
+                r.external_model,
+                r.status,
+                r.latency_ms,
+                r.error_message,
+                r.input_tokens,
+                r.output_tokens,
+                r.prompt_preview,
+                r.response_preview
+            FROM requests r
+            LEFT JOIN gateway_clients gc ON gc.id = r.gateway_client_id
+            WHERE r.tenant_id = $1
+            ORDER BY r.created_at DESC
+            LIMIT $2
             "#,
         )
+        .bind(tenant_id)
         .bind(limit)
         .fetch_all(&self.pool)
         .await?;
@@ -81,27 +93,37 @@ impl PostgresRequestsRepository {
         Ok(items)
     }
 
-    pub async fn get_request(&self, id: &str) -> Result<Option<RequestLogRecord>, RepositoryError> {
+    pub async fn get_request(
+        &self,
+        tenant_id: Uuid,
+        id: &str,
+    ) -> Result<Option<RequestLogRecord>, RepositoryError> {
         let item = query_as::<_, RequestLogRecord>(
             r#"
             SELECT
-                id,
-                created_at,
-                model_alias,
-                provider_code,
-                external_model,
-                status,
-                latency_ms,
-                error_message,
-                input_tokens,
-                output_tokens,
-                prompt_preview,
-                response_preview
-            FROM requests
-            WHERE id = $1
+                r.id,
+                r.tenant_id,
+                r.gateway_client_id,
+                gc.name AS gateway_client_name,
+                r.created_at,
+                r.model_alias,
+                r.provider_code,
+                r.external_model,
+                r.status,
+                r.latency_ms,
+                r.error_message,
+                r.input_tokens,
+                r.output_tokens,
+                r.prompt_preview,
+                r.response_preview
+            FROM requests r
+            LEFT JOIN gateway_clients gc ON gc.id = r.gateway_client_id
+            WHERE r.tenant_id = $1
+              AND r.id = $2
             LIMIT 1
             "#,
         )
+        .bind(tenant_id)
         .bind(id)
         .fetch_optional(&self.pool)
         .await?;

@@ -10,12 +10,16 @@
 - Все клиентские приложения ходят только в gateway.
 - Внешние форматы OpenAI/Anthropic/Gemini не являются публичным контрактом gateway.
 - Основной продуктовый endpoint MVP только один: `POST /api/v1/generate`.
+- Клиентский endpoint требует `Authorization: Bearer <gateway-client-token>`.
+- Admin API требует admin session token из `POST /api/auth/login`.
 
 ## POST `/api/v1/generate`
 
 ### Назначение
 
 Выполнить text generation через внутренний alias модели.
+
+Tenant определяется по machine token. Alias ищется только внутри этого tenant.
 
 ### Request body
 
@@ -74,6 +78,7 @@ Gateway возвращает понятную внутреннюю ошибку:
 
 ### Основные error codes
 
+- `unauthorized`
 - `invalid_request`
 - `route_not_found`
 - `provider_timeout`
@@ -86,6 +91,7 @@ Gateway возвращает понятную внутреннюю ошибку:
 ### HTTP status mapping
 
 - `400` — `invalid_request`
+- `401` — отсутствующий или неизвестный bearer token
 - `404` — `route_not_found`
 - `502` — provider error / invalid response / transport error
 - `504` — provider timeout
@@ -93,7 +99,33 @@ Gateway возвращает понятную внутреннюю ошибку:
 
 ## Admin API
 
-### GET `/api/admin/requests`
+### Auth
+
+- `GET /api/auth/bootstrap` - возвращает `{ "has_users": boolean }`.
+- `POST /api/auth/register` - работает только пока нет пользователей; создаёт первого owner.
+- `POST /api/auth/login` - возвращает admin session token.
+- `GET /api/auth/me` - возвращает текущего пользователя и доступные tenants.
+
+### Tenant-scoped endpoints
+
+Все endpoints ниже требуют `Authorization: Bearer <admin-session-token>`.
+
+- `GET /api/admin/tenants`
+- `POST /api/admin/tenants`
+- `GET /api/admin/users`
+- `POST /api/admin/users`
+- `GET /api/admin/tenants/:tenant_id/requests`
+- `GET /api/admin/tenants/:tenant_id/requests/:id`
+- `GET /api/admin/tenants/:tenant_id/providers`
+- `POST /api/admin/tenants/:tenant_id/providers`
+- `POST /api/admin/tenants/:tenant_id/providers/:provider_id/secret`
+- `GET /api/admin/tenants/:tenant_id/model-routes`
+- `POST /api/admin/tenants/:tenant_id/model-routes`
+- `GET /api/admin/tenants/:tenant_id/gateway-clients`
+- `POST /api/admin/tenants/:tenant_id/gateway-clients`
+- `POST /api/admin/tenants/:tenant_id/generate`
+
+### GET `/api/admin/tenants/:tenant_id/requests`
 
 Список последних запросов.
 
@@ -107,6 +139,9 @@ Query params:
 [
   {
     "id": "req_4d4d6f4df77f4c1e8260f60f052f63cc",
+    "tenant_id": "8f6b4a40-4d10-4e6e-8f03-53b8d2c0e6aa",
+    "gateway_client_id": "f840c62d-a8d0-4cfd-93a2-4f33f3ce94cb",
+    "gateway_client_name": "factum-prod",
     "created_at": "2026-04-17T18:20:00Z",
     "model_alias": "smart-default",
     "provider_code": "openai",
@@ -120,33 +155,18 @@ Query params:
 ]
 ```
 
-### GET `/api/admin/requests/:id`
+### Provider secrets
 
-Детали одного запроса, включая `prompt_preview` и `response_preview`.
+Provider API key передаётся только в write endpoints:
 
-### GET `/api/admin/providers`
+- optional `api_key` в `POST /api/admin/tenants/:tenant_id/providers`;
+- обязательный `api_key` в `POST /api/admin/tenants/:tenant_id/providers/:provider_id/secret`.
 
-Список provider-конфигов, которые сейчас лежат в БД.
+API responses возвращают только `api_key_configured: true|false`.
 
-### GET `/api/admin/model-routes`
+### Gateway clients
 
-Список alias routes, через которые gateway резолвит модель.
-
-### POST `/api/admin/generate`
-
-Admin-only smoke-test генерации. Формат совпадает с `POST /api/v1/generate`, но дополнительно можно передать `api_key` для разового вызова upstream-провайдера:
-
-```json
-{
-  "model": "smart-default",
-  "api_key": "sk-...",
-  "messages": [
-    { "role": "user", "content": "Проверь маршрут" }
-  ]
-}
-```
-
-Если `api_key` не передан, gateway берёт ключ из env по `providers.api_key_env`. Переданный ключ не сохраняется в таблицу `requests`; в истории остаются только обычные preview запроса и ответа.
+`POST /api/admin/tenants/:tenant_id/gateway-clients` возвращает plaintext token один раз. В БД хранится только hash и prefix.
 
 ## GET `/health`
 

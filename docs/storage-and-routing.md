@@ -2,141 +2,55 @@
 
 ## Общая идея
 
-В MVP конфигурация маршрутов и providers живёт в PostgreSQL, потому что это:
+AI Gateway теперь хранит конфигурацию как tenant-scoped данные. Один процесс может обслуживать несколько Factum-инсталляций, но `smart-default`, provider secrets, machine tokens и request history не являются глобальными.
 
-- достаточно просто для первого этапа;
-- уже даёт admin API поверх реальных данных;
-- не мешает позже добавить UI-редактирование;
-- не требует прятать секреты в БД.
+Публичный `POST /api/v1/generate` требует `Authorization: Bearer <gateway-client-token>`. В БД хранится только SHA-256 hash token, по нему gateway находит `gateway_clients.tenant_id`.
 
-Секреты провайдера в таблицах не хранятся. Вместо этого provider хранит имя env-переменной, например `OPENAI_API_KEY`.
+## Основные таблицы
 
-## Таблица `providers`
+- `users` - admin users с Argon2 password hash.
+- `tenants` - отдельные клиенты/инсталляции/организации.
+- `tenant_members` - роль пользователя внутри tenant: `tenant_admin` или `viewer`.
+- `admin_sessions` - opaque admin session tokens, в БД только hash.
+- `gateway_clients` - machine clients для Factum backend, в БД только token hash и prefix.
+- `providers` - tenant-local provider config: `code`, `kind`, `base_url`, enabled flag, timeout.
+- `provider_secrets` - encrypted-at-rest provider API key.
+- `model_routes` - tenant-local alias route: `alias`, `provider_code`, `external_model`.
+- `requests` - tenant/client-scoped история запросов.
 
-Назначение: описывает, как gateway должен ходить к конкретному AI-провайдеру.
+## Provider secrets
 
-Поля:
+Plaintext provider API key не хранится и не возвращается через API.
 
-- `code` — внутренний код провайдера, например `openai`
-- `kind` — тип adapter, например `openai-compatible`
-- `base_url` — upstream base URL
-- `api_key_env` — имя env-переменной с ключом
-- `is_enabled` — включён ли provider
-- `timeout_ms` — timeout на upstream call
+Для MVP используется AES-256-GCM:
 
-Пример строки:
+- env: `GATEWAY_MASTER_KEY=<base64-32-byte-key>`
+- DB: `ciphertext`, `nonce`, `algorithm`, `key_version`
 
-```text
-code=openai
-kind=openai-compatible
-base_url=https://api.openai.com/v1
-api_key_env=OPENAI_API_KEY
-```
+Decrypted key существует только внутри generate flow перед вызовом provider adapter. Его нельзя логировать, возвращать в API или писать в request history.
 
-## Таблица `model_routes`
+## Routing flow
 
-Назначение: мапит внутренний alias на конкретный provider и внешнюю модель.
-
-Поля:
-
-- `alias`
-- `provider_code`
-- `external_model`
-- `is_enabled`
-
-Пример:
-
-```text
-alias=smart-default
-provider_code=openai
-external_model=gpt-4.1-mini
-```
-
-## Таблица `requests`
-
-Назначение: хранит историю вызовов gateway.
-
-Поля:
-
-- `id`
-- `created_at`
-- `model_alias`
-- `provider_code`
-- `external_model`
-- `status`
-- `latency_ms`
-- `error_message`
-- `input_tokens`
-- `output_tokens`
-- `prompt_preview`
-- `response_preview`
-
-Таблица хранит не полный transcript, а безопасный preview. Это осознанный компромисс MVP.
-
-## Почему нет `request_events`
-
-Для первой версии отдельная таблица `request_events` не введена специально.
-
-Причина простая: пока нет retry orchestration, fallback chains, streaming states и сложной асинхронной обработки, одной таблицы `requests` достаточно.
-
-Когда появятся:
-
-- retry;
-- fallback между providers;
-- промежуточные состояния;
-- streaming lifecycle;
-
-тогда `request_events` станет оправданной.
+1. Factum вызывает `POST /api/v1/generate` с gateway client token.
+2. Gateway hash-ит token и ищет enabled `gateway_clients`.
+3. Из `gateway_clients.tenant_id` определяется tenant.
+4. `model_routes` ищется по `(tenant_id, alias)`.
+5. Provider ищется по `(tenant_id, provider_code)`.
+6. Provider secret берётся из `provider_secrets` и расшифровывается через `GATEWAY_MASTER_KEY`.
+7. Adapter вызывает внешний AI API.
+8. `requests` получает `tenant_id` и `gateway_client_id`.
 
 ## Seed-логика
 
-После применения migrations приложение делает upsert базовой конфигурации:
+После migrations приложение делает upsert default provider/model route в tenant `default`. Это сохраняет быстрый старт, но provider API key всё равно нужно сохранить через admin UI, иначе generation вернёт `gateway_misconfigured`.
 
-- provider из env `DEFAULT_PROVIDER_*`
-- alias route из env `DEFAULT_MODEL_ALIAS` и `DEFAULT_EXTERNAL_MODEL`
+## Как добавить provider
 
-Это даёт рабочий старт с нуля без ручного наполнения БД.
+Через admin UI:
 
-## Как добавить нового provider
+1. Выбрать tenant.
+2. Создать provider с `code`, `kind`, `base_url`, `timeout_ms`.
+3. Сохранить API key в provider secret.
+4. Создать/обновить model route на этот `provider_code`.
 
-1. Добавить adapter в код.
-2. Зарегистрировать новый `kind` в provider registry.
-3. Вставить строку в `providers`.
-4. Убедиться, что env из `api_key_env` задан в runtime.
-
-Пример SQL:
-
-```sql
-INSERT INTO providers (code, kind, base_url, api_key_env, is_enabled, timeout_ms)
-VALUES ('my-provider', 'openai-compatible', 'https://relay.example.com/v1', 'MY_PROVIDER_API_KEY', TRUE, 60000);
-```
-
-## Как добавить новый alias
-
-Пример:
-
-```sql
-INSERT INTO model_routes (alias, provider_code, external_model, is_enabled)
-VALUES ('cheap-default', 'openai', 'gpt-4.1-mini', TRUE);
-```
-
-После этого клиент может вызывать:
-
-```json
-{
-  "model": "cheap-default",
-  "messages": [
-    { "role": "user", "content": "..." }
-  ]
-}
-```
-
-## Текущие ограничения схемы
-
-- нет versioning для provider-конфигов;
-- нет audit trail изменений routes;
-- нет отдельного хранения полного prompt/response;
-- нет метрик по retry/fallback;
-- нет нормализованной billing-аналитики.
-
-Для MVP это сознательно упрощено.
+Новый provider kind в коде по-прежнему добавляется через отдельный adapter в `src/providers/` и регистрацию в `ProviderRegistry`.

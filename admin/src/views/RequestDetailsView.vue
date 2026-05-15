@@ -7,9 +7,11 @@ import ProgressSpinner from 'primevue/progressspinner'
 import Tag from 'primevue/tag'
 import Toolbar from 'primevue/toolbar'
 
-import { fetchRequestDetails, formatDateTime, severityForStatus, type RequestDetails } from '../api'
+import { useAuth } from '../auth'
+import { fetchRequestDetails, formatApiError, formatDateTime, severityForStatus, type RequestDetails } from '../api'
 
 const route = useRoute()
+const { activeTenantId } = useAuth()
 const loading = ref(true)
 const errorMessage = ref('')
 const item = ref<RequestDetails | null>(null)
@@ -20,10 +22,16 @@ async function loadRequest() {
   loading.value = true
   errorMessage.value = ''
 
+  if (!activeTenantId.value) {
+    errorMessage.value = 'Tenant не выбран'
+    loading.value = false
+    return
+  }
+
   try {
-    item.value = await fetchRequestDetails(requestId.value)
+    item.value = await fetchRequestDetails(activeTenantId.value, requestId.value)
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : 'Не удалось загрузить детали запроса'
+    errorMessage.value = formatApiError(error, 'Не удалось загрузить детали запроса')
   } finally {
     loading.value = false
   }
@@ -81,6 +89,10 @@ onMounted(loadRequest)
             <div class="summary-item">
               <dt>Provider</dt>
               <dd>{{ item.provider_code ?? '-' }}</dd>
+            </div>
+            <div class="summary-item">
+              <dt>Client</dt>
+              <dd>{{ item.gateway_client_name ?? 'admin' }}</dd>
             </div>
             <div class="summary-item">
               <dt>Модель</dt>

@@ -1,15 +1,15 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import Button from 'primevue/button'
 import Fluid from 'primevue/fluid'
 import InputNumber from 'primevue/inputnumber'
 import Message from 'primevue/message'
-import Password from 'primevue/password'
 import ProgressSpinner from 'primevue/progressspinner'
 import Select from 'primevue/select'
 import Tag from 'primevue/tag'
 import Textarea from 'primevue/textarea'
 
+import { useAuth } from '../auth'
 import {
   fetchModelRoutes,
   formatApiError,
@@ -19,11 +19,11 @@ import {
   type ModelRouteItem,
 } from '../api'
 
+const { activeTenantId } = useAuth()
 const routesLoading = ref(true)
 const routesError = ref('')
 const routes = ref<ModelRouteItem[]>([])
 const model = ref('')
-const apiKey = ref('')
 const systemPrompt = ref('')
 const userPrompt = ref('Скажи коротко: gateway работает?')
 const temperature = ref<number | null>(0.2)
@@ -44,8 +44,15 @@ async function loadRoutes() {
   routesLoading.value = true
   routesError.value = ''
 
+  if (!activeTenantId.value) {
+    routes.value = []
+    model.value = ''
+    routesLoading.value = false
+    return
+  }
+
   try {
-    routes.value = await fetchModelRoutes()
+    routes.value = await fetchModelRoutes(activeTenantId.value)
     model.value ||= enabledRoutes.value[0]?.alias ?? ''
   } catch (error) {
     routesError.value = formatApiError(error, 'Не удалось загрузить model routes')
@@ -86,10 +93,13 @@ async function sendRequest() {
   const startedAt = performance.now()
 
   try {
-    response.value = await generateText({
+    if (!activeTenantId.value) {
+      throw new Error('Tenant не выбран')
+    }
+
+    response.value = await generateText(activeTenantId.value, {
       model: model.value.trim(),
       messages,
-      api_key: normalizeOptionalText(apiKey.value),
       options,
     })
     latencyMs.value = Math.round(performance.now() - startedAt)
@@ -106,13 +116,8 @@ function clearResponse() {
   latencyMs.value = null
 }
 
-function normalizeOptionalText(value: string): string | undefined {
-  const normalized = value.trim()
-
-  return normalized ? normalized : undefined
-}
-
 onMounted(loadRoutes)
+watch(activeTenantId, loadRoutes)
 </script>
 
 <template>
@@ -144,17 +149,6 @@ onMounted(loadRoutes)
                 filter
                 :loading="routesLoading"
                 placeholder="Выберите или введите alias"
-              />
-            </div>
-
-            <div class="field">
-              <label for="apiKey">API key</label>
-              <Password
-                id="apiKey"
-                v-model="apiKey"
-                :feedback="false"
-                toggle-mask
-                placeholder="Env provider по умолчанию"
               />
             </div>
 

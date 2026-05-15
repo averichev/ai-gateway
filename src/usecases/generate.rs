@@ -1,4 +1,4 @@
-use std::{env, sync::Arc, time::Instant};
+use std::{sync::Arc, time::Instant};
 
 use axum::http::StatusCode;
 use tracing::{error, warn};
@@ -11,6 +11,7 @@ use crate::{
     },
     providers::{ProviderError, ProviderRegistry},
     repositories::{PostgresRequestsRepository, PostgresRoutesRepository, RepositoryError},
+    security::SecretCrypto,
 };
 
 #[derive(Clone)]
@@ -18,6 +19,7 @@ pub struct GenerateService {
     routes_repo: Arc<PostgresRoutesRepository>,
     requests_repo: Arc<PostgresRequestsRepository>,
     providers: ProviderRegistry,
+    secret_crypto: SecretCrypto,
     request_preview_chars: usize,
     response_preview_chars: usize,
 }
@@ -27,6 +29,7 @@ impl GenerateService {
         routes_repo: Arc<PostgresRoutesRepository>,
         requests_repo: Arc<PostgresRequestsRepository>,
         providers: ProviderRegistry,
+        secret_crypto: SecretCrypto,
         request_preview_chars: usize,
         response_preview_chars: usize,
     ) -> Self {
@@ -34,30 +37,35 @@ impl GenerateService {
             routes_repo,
             requests_repo,
             providers,
+            secret_crypto,
             request_preview_chars,
             response_preview_chars,
         }
     }
 
-    pub async fn generate(
+    pub async fn generate_for_client(
         &self,
         request: GenerateRequestDto,
+        tenant_id: Uuid,
+        gateway_client_id: Uuid,
     ) -> Result<GenerateResponseDto, ServiceError> {
-        self.generate_inner(request, None).await
+        self.generate_inner(request, tenant_id, Some(gateway_client_id))
+            .await
     }
 
-    pub async fn generate_with_api_key_override(
+    pub async fn generate_for_admin(
         &self,
         request: GenerateRequestDto,
-        api_key_override: Option<String>,
+        tenant_id: Uuid,
     ) -> Result<GenerateResponseDto, ServiceError> {
-        self.generate_inner(request, api_key_override).await
+        self.generate_inner(request, tenant_id, None).await
     }
 
     async fn generate_inner(
         &self,
         request: GenerateRequestDto,
-        api_key_override: Option<String>,
+        tenant_id: Uuid,
+        gateway_client_id: Option<Uuid>,
     ) -> Result<GenerateResponseDto, ServiceError> {
         let request_id = new_request_id();
         let prompt_preview = preview_messages(&request.messages, self.request_preview_chars);
@@ -66,6 +74,8 @@ impl GenerateService {
             let message = "Поля `model` и `messages` обязательны".to_owned();
             self.store_request_log(RequestLogInsert {
                 id: request_id.clone(),
+                tenant_id,
+                gateway_client_id,
                 model_alias: request.model.clone(),
                 provider_code: None,
                 external_model: None,
@@ -91,7 +101,7 @@ impl GenerateService {
 
         let route = self
             .routes_repo
-            .resolve_route(&request.model)
+            .resolve_route(tenant_id, &request.model)
             .await
             .map_err(|error| {
                 error!(error = %error, "failed to resolve model route");
@@ -109,6 +119,8 @@ impl GenerateService {
                 let message = format!("Alias `{}` не найден или выключен", request.model);
                 self.store_request_log(RequestLogInsert {
                     id: request_id.clone(),
+                    tenant_id,
+                    gateway_client_id,
                     model_alias: request.model.clone(),
                     provider_code: None,
                     external_model: None,
@@ -141,28 +153,72 @@ impl GenerateService {
                     &request.model,
                     &route.provider_code,
                     &route.external_model,
+                    tenant_id,
+                    gateway_client_id,
                     prompt_preview.clone(),
                     started_at.elapsed().as_millis() as i64,
                     error,
                 )
             })?;
 
-        let api_key = match normalize_api_key_override(api_key_override) {
-            Some(api_key) => Ok(api_key),
-            None => env::var(&route.provider_api_key_env),
-        }
-        .map_err(|_| ProviderError::MissingApiKey(route.provider_api_key_env.clone()))
-        .map_err(|error| {
-            self.provider_error_to_service_error(
+        let provider_secret = self
+            .routes_repo
+            .get_provider_secret(tenant_id, route.provider_id)
+            .await
+            .map_err(|error| {
+                error!(error = %error, "failed to read provider secret");
+                ServiceError::new(
+                    request_id.clone(),
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "storage_error",
+                    "Не удалось прочитать provider secret".to_owned(),
+                )
+            })?
+            .ok_or_else(|| ProviderError::MissingProviderSecret(route.provider_code.clone()))
+            .map_err(|error| {
+                self.provider_error_to_service_error(
+                    request_id.clone(),
+                    &request.model,
+                    &route.provider_code,
+                    &route.external_model,
+                    tenant_id,
+                    gateway_client_id,
+                    prompt_preview.clone(),
+                    started_at.elapsed().as_millis() as i64,
+                    error,
+                )
+            })?;
+
+        if provider_secret.algorithm != "AES-256-GCM" || provider_secret.key_version != 1 {
+            return Err(self.provider_error_to_service_error(
                 request_id.clone(),
                 &request.model,
                 &route.provider_code,
                 &route.external_model,
+                tenant_id,
+                gateway_client_id,
                 prompt_preview.clone(),
                 started_at.elapsed().as_millis() as i64,
-                error,
-            )
-        })?;
+                ProviderError::ProviderSecretUnavailable(route.provider_code.clone()),
+            ));
+        }
+
+        let api_key = self
+            .secret_crypto
+            .decrypt(&provider_secret.ciphertext, &provider_secret.nonce)
+            .map_err(|_| {
+                self.provider_error_to_service_error(
+                    request_id.clone(),
+                    &request.model,
+                    &route.provider_code,
+                    &route.external_model,
+                    tenant_id,
+                    gateway_client_id,
+                    prompt_preview.clone(),
+                    started_at.elapsed().as_millis() as i64,
+                    ProviderError::ProviderSecretUnavailable(route.provider_code.clone()),
+                )
+            })?;
 
         let result = adapter
             .generate(&route, &request, &api_key)
@@ -173,6 +229,8 @@ impl GenerateService {
                     &request.model,
                     &route.provider_code,
                     &route.external_model,
+                    tenant_id,
+                    gateway_client_id,
                     prompt_preview.clone(),
                     started_at.elapsed().as_millis() as i64,
                     error,
@@ -184,6 +242,8 @@ impl GenerateService {
 
         self.store_request_log(RequestLogInsert {
             id: request_id.clone(),
+            tenant_id,
+            gateway_client_id,
             model_alias: request.model.clone(),
             provider_code: Some(route.provider_code.clone()),
             external_model: Some(route.external_model.clone()),
@@ -217,6 +277,8 @@ impl GenerateService {
         model_alias: &str,
         provider_code: &str,
         external_model: &str,
+        tenant_id: Uuid,
+        gateway_client_id: Option<Uuid>,
         prompt_preview: Option<String>,
         latency_ms: i64,
         error: ProviderError,
@@ -226,9 +288,9 @@ impl GenerateService {
             ProviderError::Upstream { .. }
             | ProviderError::Transport(_)
             | ProviderError::InvalidResponse(_) => StatusCode::BAD_GATEWAY,
-            ProviderError::MissingApiKey(_) | ProviderError::UnsupportedKind(_) => {
-                StatusCode::INTERNAL_SERVER_ERROR
-            }
+            ProviderError::MissingProviderSecret(_)
+            | ProviderError::ProviderSecretUnavailable(_)
+            | ProviderError::UnsupportedKind(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
 
         let client_code = error.client_code().to_owned();
@@ -245,6 +307,8 @@ impl GenerateService {
         tokio::spawn(async move {
             let request = RequestLogInsert {
                 id: request_id_for_log.clone(),
+                tenant_id,
+                gateway_client_id,
                 model_alias,
                 provider_code: Some(provider_code),
                 external_model: Some(external_model),
@@ -288,12 +352,6 @@ fn build_response(
 
 fn new_request_id() -> String {
     format!("req_{}", Uuid::new_v4().simple())
-}
-
-fn normalize_api_key_override(api_key: Option<String>) -> Option<String> {
-    api_key
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
 }
 
 fn preview_messages(messages: &[GenerateMessageDto], max_chars: usize) -> Option<String> {

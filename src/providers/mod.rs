@@ -52,8 +52,10 @@ pub enum ProviderError {
     },
     #[error("invalid provider response: {0}")]
     InvalidResponse(String),
-    #[error("missing API key in env variable `{0}`")]
-    MissingApiKey(String),
+    #[error("missing encrypted provider secret for `{0}`")]
+    MissingProviderSecret(String),
+    #[error("provider secret cannot be decrypted for `{0}`")]
+    ProviderSecretUnavailable(String),
     #[error("unsupported provider kind `{0}`")]
     UnsupportedKind(String),
     #[error("provider transport error: {0}")]
@@ -66,7 +68,9 @@ impl ProviderError {
             Self::Timeout(_) => "provider_timeout",
             Self::Upstream { .. } => "provider_error",
             Self::InvalidResponse(_) => "provider_invalid_response",
-            Self::MissingApiKey(_) | Self::UnsupportedKind(_) => "gateway_misconfigured",
+            Self::MissingProviderSecret(_)
+            | Self::ProviderSecretUnavailable(_)
+            | Self::UnsupportedKind(_) => "gateway_misconfigured",
             Self::Transport(_) => "provider_transport_error",
         }
     }
@@ -76,7 +80,9 @@ impl ProviderError {
             Self::Timeout(_) => "provider_timeout",
             Self::Upstream { .. } => "provider_error",
             Self::InvalidResponse(_) => "provider_invalid_response",
-            Self::MissingApiKey(_) | Self::UnsupportedKind(_) => "gateway_misconfigured",
+            Self::MissingProviderSecret(_)
+            | Self::ProviderSecretUnavailable(_)
+            | Self::UnsupportedKind(_) => "gateway_misconfigured",
             Self::Transport(_) => "provider_transport_error",
         }
     }
@@ -86,8 +92,11 @@ impl ProviderError {
             Self::Timeout(_) => "Провайдер не ответил вовремя".to_owned(),
             Self::Upstream { message, .. } => format!("Провайдер вернул ошибку: {message}"),
             Self::InvalidResponse(_) => "Провайдер вернул некорректный ответ".to_owned(),
-            Self::MissingApiKey(env_name) => {
-                format!("Gateway не настроен: отсутствует env `{env_name}`")
+            Self::MissingProviderSecret(provider_code) => {
+                format!("Gateway не настроен: отсутствует provider secret для `{provider_code}`")
+            }
+            Self::ProviderSecretUnavailable(provider_code) => {
+                format!("Gateway не смог прочитать provider secret для `{provider_code}`")
             }
             Self::UnsupportedKind(kind) => {
                 format!("Gateway не умеет работать с provider kind `{kind}`")

@@ -145,18 +145,21 @@ Use case не должен знать, как устроен OpenAI, Claude ил
 1. Создать adapter в `src/providers/`.
 2. Реализовать `ProviderAdapter`.
 3. Зарегистрировать adapter в provider registry.
-4. Добавить `kind` в таблицу `providers`.
-5. Добавить alias в `model_routes`.
+4. Добавить tenant-local provider с этим `kind`.
+5. Сохранить encrypted provider secret.
+6. Добавить tenant-local alias в `model_routes`.
 
 Пример:
 
 ```sql
-INSERT INTO providers (code, kind, base_url, api_key_env, is_enabled, timeout_ms)
-VALUES ('anthropic', 'anthropic', 'https://api.anthropic.com', 'ANTHROPIC_API_KEY', TRUE, 60000);
+INSERT INTO providers (tenant_id, code, kind, base_url, api_key_env, is_enabled, timeout_ms)
+VALUES ('00000000-0000-0000-0000-000000000000', 'anthropic', 'anthropic', 'https://api.anthropic.com', '', TRUE, 60000);
 
-INSERT INTO model_routes (alias, provider_code, external_model, is_enabled)
-VALUES ('claude-default', 'anthropic', 'claude-sonnet', TRUE);
+INSERT INTO model_routes (tenant_id, alias, provider_code, external_model, is_enabled)
+VALUES ('00000000-0000-0000-0000-000000000000', 'claude-default', 'anthropic', 'claude-sonnet', TRUE);
 ```
+
+На практике эти записи лучше создавать через admin UI/API, чтобы provider key попал в `provider_secrets` encrypted-at-rest.
 
 Клиент при этом продолжает вызывать gateway одинаково:
 
@@ -193,7 +196,7 @@ POST /v1/chat/completions
 - Не тащить OpenAI request/response в core domain как основной контракт.
 - Не добавлять Claude через хаки в `openai_compatible.rs`.
 - Не создавать преждевременно "универсальный AI runtime" для streaming, tools, embeddings и multimodal, пока эти сценарии не реализуются.
-- Не хранить API keys в PostgreSQL.
+- Не хранить plaintext API keys в PostgreSQL.
 - Не делать provider-specific поля обязательными для всех providers.
 
 Расширять нужно capability-first:

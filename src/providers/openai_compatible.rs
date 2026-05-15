@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
-use reqwest::Client;
+use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -34,37 +34,22 @@ impl ProviderAdapter for OpenAiCompatibleProvider {
         request: &GenerateRequestDto,
         api_key: &str,
     ) -> Result<ProviderGenerateResult, ProviderError> {
-        let payload = OpenAiRequestPayload {
-            model: route.external_model.clone(),
-            messages: request
-                .messages
-                .iter()
-                .map(|message| OpenAiMessagePayload {
-                    role: message.role.as_str().to_owned(),
-                    content: message.content.clone(),
-                })
-                .collect(),
-            temperature: request.options.temperature,
-            max_tokens: request.options.max_tokens,
-        };
-
-        let url = format!(
-            "{}/chat/completions",
-            route.provider_base_url.trim_end_matches('/')
+        let payload = OpenAiRequestPayload::from_generate_request(
+            route,
+            request,
+            TokenLimitParameter::MaxTokens,
         );
 
-        let response = self
-            .client
-            .post(url)
-            .bearer_auth(api_key)
-            .timeout(Duration::from_millis(route.provider_timeout_ms as u64))
-            .json(&payload)
-            .send()
-            .await
-            .map_err(map_transport_error)?;
+        let (mut status, mut body) = self.send_chat_completion(route, api_key, &payload).await?;
 
-        let status = response.status();
-        let body = response.text().await.map_err(map_transport_error)?;
+        if should_retry_with_max_completion_tokens(status, &body, request.options.max_tokens) {
+            let payload = OpenAiRequestPayload::from_generate_request(
+                route,
+                request,
+                TokenLimitParameter::MaxCompletionTokens,
+            );
+            (status, body) = self.send_chat_completion(route, api_key, &payload).await?;
+        }
 
         if !status.is_success() {
             let message = extract_error_message(&body)
@@ -99,6 +84,35 @@ impl ProviderAdapter for OpenAiCompatibleProvider {
     }
 }
 
+impl OpenAiCompatibleProvider {
+    async fn send_chat_completion(
+        &self,
+        route: &ResolvedRouteRecord,
+        api_key: &str,
+        payload: &OpenAiRequestPayload,
+    ) -> Result<(StatusCode, String), ProviderError> {
+        let url = format!(
+            "{}/chat/completions",
+            route.provider_base_url.trim_end_matches('/')
+        );
+
+        let response = self
+            .client
+            .post(url)
+            .bearer_auth(api_key)
+            .timeout(Duration::from_millis(route.provider_timeout_ms as u64))
+            .json(payload)
+            .send()
+            .await
+            .map_err(map_transport_error)?;
+
+        let status = response.status();
+        let body = response.text().await.map_err(map_transport_error)?;
+
+        Ok((status, body))
+    }
+}
+
 fn map_transport_error(error: reqwest::Error) -> ProviderError {
     if error.is_timeout() {
         ProviderError::Timeout(error.to_string())
@@ -121,6 +135,28 @@ fn extract_error_message(body: &str) -> Option<String> {
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned)
         })
+}
+
+fn should_retry_with_max_completion_tokens(
+    status: StatusCode,
+    body: &str,
+    max_tokens: Option<i32>,
+) -> bool {
+    if max_tokens.is_none()
+        || !matches!(
+            status,
+            StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY
+        )
+    {
+        return false;
+    }
+
+    let Some(message) = extract_error_message(body) else {
+        return false;
+    };
+    let message = message.to_ascii_lowercase();
+
+    message.contains("max_tokens") && message.contains("max_completion_tokens")
 }
 
 fn extract_content_text(content: Option<Value>) -> Option<String> {
@@ -157,6 +193,42 @@ struct OpenAiRequestPayload {
     temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_completion_tokens: Option<i32>,
+}
+
+impl OpenAiRequestPayload {
+    fn from_generate_request(
+        route: &ResolvedRouteRecord,
+        request: &GenerateRequestDto,
+        token_limit_parameter: TokenLimitParameter,
+    ) -> Self {
+        let (max_tokens, max_completion_tokens) = match token_limit_parameter {
+            TokenLimitParameter::MaxTokens => (request.options.max_tokens, None),
+            TokenLimitParameter::MaxCompletionTokens => (None, request.options.max_tokens),
+        };
+
+        Self {
+            model: route.external_model.clone(),
+            messages: request
+                .messages
+                .iter()
+                .map(|message| OpenAiMessagePayload {
+                    role: message.role.as_str().to_owned(),
+                    content: message.content.clone(),
+                })
+                .collect(),
+            temperature: request.options.temperature,
+            max_tokens,
+            max_completion_tokens,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum TokenLimitParameter {
+    MaxTokens,
+    MaxCompletionTokens,
 }
 
 #[derive(Debug, Serialize)]
@@ -282,6 +354,60 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn generate_retries_with_max_completion_tokens_when_model_rejects_max_tokens() {
+        let request_count = Arc::new(AtomicUsize::new(0));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = Router::new()
+            .route(
+                "/chat/completions",
+                post(handle_chat_completions_requiring_max_completion_tokens),
+            )
+            .with_state(MockApiState {
+                request_count: request_count.clone(),
+            });
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let provider = OpenAiCompatibleProvider::new().unwrap();
+        let route = ResolvedRouteRecord {
+            provider_id: uuid::Uuid::new_v4(),
+            external_model: "external-test-model".to_owned(),
+            provider_code: "mock-provider".to_owned(),
+            provider_kind: "openai-compatible".to_owned(),
+            provider_base_url: format!("http://{address}"),
+            provider_timeout_ms: 1_000,
+        };
+        let request = GenerateRequestDto {
+            model: "test-model".to_owned(),
+            messages: vec![GenerateMessageDto {
+                role: MessageRole::User,
+                content: "ping".to_owned(),
+            }],
+            options: GenerateOptionsDto {
+                temperature: Some(0.2),
+                max_tokens: Some(32),
+            },
+        };
+
+        let response = provider
+            .generate(&route, &request, "test-token")
+            .await
+            .unwrap();
+
+        server.abort();
+        tokio::time::timeout(Duration::from_secs(1), server)
+            .await
+            .expect("mock API server did not stop")
+            .expect_err("mock API server stopped without abort");
+
+        assert_eq!(request_count.load(Ordering::SeqCst), 2);
+        assert_eq!(response.output_text, "pong");
+        assert_eq!(response.finish_reason, "stop");
+    }
+
     async fn handle_chat_completions(
         State(state): State<MockApiState>,
         headers: HeaderMap,
@@ -318,5 +444,57 @@ mod tests {
                 }
             })),
         )
+    }
+
+    async fn handle_chat_completions_requiring_max_completion_tokens(
+        State(state): State<MockApiState>,
+        headers: HeaderMap,
+        Json(payload): Json<Value>,
+    ) -> (StatusCode, Json<Value>) {
+        assert_eq!(
+            headers
+                .get(header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer test-token")
+        );
+        assert_eq!(payload["model"], json!("external-test-model"));
+        assert_eq!(payload["messages"][0]["role"], json!("user"));
+        assert_eq!(payload["messages"][0]["content"], json!("ping"));
+        assert_eq!(payload["temperature"].as_f64(), Some(0.2));
+
+        match state.request_count.fetch_add(1, Ordering::SeqCst) {
+            0 => {
+                assert_eq!(payload["max_tokens"], json!(32));
+                assert!(payload.get("max_completion_tokens").is_none());
+
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({
+                        "error": {
+                            "message": "Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead."
+                        }
+                    })),
+                )
+            }
+            1 => {
+                assert!(payload.get("max_tokens").is_none());
+                assert_eq!(payload["max_completion_tokens"], json!(32));
+
+                (
+                    StatusCode::OK,
+                    Json(json!({
+                        "choices": [
+                            {
+                                "message": {
+                                    "content": "pong"
+                                },
+                                "finish_reason": "stop"
+                            }
+                        ]
+                    })),
+                )
+            }
+            count => panic!("unexpected request count {count}"),
+        }
     }
 }

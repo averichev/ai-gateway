@@ -22,6 +22,12 @@ import {
   formatDateTime,
   type AdminUserItem,
 } from '../api'
+import {
+  enabledSeverity,
+  formatEnabled,
+  formatGlobalRole,
+  formatTenantRole,
+} from '../display'
 
 const { user, tenants } = useAuth()
 const loading = ref(true)
@@ -39,8 +45,8 @@ const filters = ref({
   global: { value: null as string | null, matchMode: FilterMatchMode.CONTAINS },
 })
 const roleOptions = [
-  { label: 'Viewer', value: 'viewer' },
-  { label: 'Tenant admin', value: 'tenant_admin' },
+  { label: formatTenantRole('viewer'), value: 'viewer' },
+  { label: formatTenantRole('tenant_admin'), value: 'tenant_admin' },
 ]
 const tenantOptions = computed(() => tenants.value.map((tenant) => ({ label: tenant.name, value: tenant.id })))
 const canCreateUser = computed(() => user.value?.global_role === 'owner')
@@ -53,7 +59,7 @@ async function loadUsers() {
   try {
     items.value = await fetchUsers()
   } catch (error) {
-    errorMessage.value = formatApiError(error, 'Не удалось загрузить users')
+    errorMessage.value = formatApiError(error, 'Не удалось загрузить пользователей')
   } finally {
     loading.value = false
   }
@@ -87,7 +93,7 @@ async function submitUser() {
     dialogVisible.value = false
     await loadUsers()
   } catch (error) {
-    errorMessage.value = formatApiError(error, 'Не удалось создать user')
+    errorMessage.value = formatApiError(error, 'Не удалось создать пользователя')
   } finally {
     saving.value = false
   }
@@ -103,8 +109,8 @@ onMounted(loadUsers)
         <Toolbar class="mb-6">
           <template #start>
             <div>
-              <h4 class="m-0">Users</h4>
-              <div class="text-muted mt-4">Admin users и членство в tenants</div>
+              <h4 class="m-0">Пользователи</h4>
+              <div class="text-muted mt-4">Администраторы и доступ к организациям</div>
             </div>
           </template>
 
@@ -146,19 +152,19 @@ onMounted(loadUsers)
             </div>
           </template>
 
-          <Column field="email" header="Email" sortable style="min-width: 16rem" />
-          <Column field="global_role" header="Global role" sortable style="min-width: 10rem">
+          <Column field="email" header="Почта" sortable style="min-width: 16rem" />
+          <Column field="global_role" header="Глобальная роль" sortable style="min-width: 10rem">
             <template #body="{ data }">
-              <Tag :value="data.global_role" :severity="data.global_role === 'owner' ? 'success' : 'secondary'" />
+              <Tag :value="formatGlobalRole(data.global_role)" :severity="data.global_role === 'owner' ? 'success' : 'secondary'" />
             </template>
           </Column>
-          <Column field="tenant_count" header="Tenants" sortable style="min-width: 9rem" />
-          <Column field="is_enabled" header="Enabled" sortable style="min-width: 9rem">
+          <Column field="tenant_count" header="Организации" sortable style="min-width: 9rem" />
+          <Column field="is_enabled" header="Статус" sortable style="min-width: 9rem">
             <template #body="{ data }">
-              <Tag :value="data.is_enabled ? 'enabled' : 'disabled'" :severity="data.is_enabled ? 'success' : 'danger'" />
+              <Tag :value="formatEnabled(data.is_enabled)" :severity="enabledSeverity(data.is_enabled)" />
             </template>
           </Column>
-          <Column field="created_at" header="Created" sortable style="min-width: 12rem">
+          <Column field="created_at" header="Создан" sortable style="min-width: 12rem">
             <template #body="{ data }">
               {{ formatDateTime(data.created_at) }}
             </template>
@@ -168,18 +174,18 @@ onMounted(loadUsers)
     </div>
   </div>
 
-  <Dialog v-model:visible="dialogVisible" modal header="User" class="admin-dialog">
+  <Dialog v-model:visible="dialogVisible" modal header="Пользователь" class="admin-dialog">
     <form class="admin-form" @submit.prevent="submitUser">
       <div class="field">
-        <label for="userEmail">Email</label>
+        <label for="userEmail">Почта</label>
         <InputText id="userEmail" v-model="form.email" type="email" autofocus />
       </div>
       <div class="field">
-        <label for="userPassword">Initial password</label>
+        <label for="userPassword">Начальный пароль</label>
         <Password id="userPassword" v-model="form.password" feedback toggle-mask />
       </div>
       <div class="field">
-        <label for="userTenant">Tenant</label>
+        <label for="userTenant">Организация</label>
         <Select
           id="userTenant"
           v-model="form.tenant_id"
@@ -187,11 +193,11 @@ onMounted(loadUsers)
           option-label="label"
           option-value="value"
           show-clear
-          placeholder="Без tenant membership"
+          placeholder="Без доступа к организации"
         />
       </div>
       <div class="field">
-        <label for="userTenantRole">Tenant role</label>
+        <label for="userTenantRole">Роль в организации</label>
         <Select
           id="userTenantRole"
           v-model="form.tenant_role"

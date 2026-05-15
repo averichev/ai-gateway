@@ -16,6 +16,7 @@ import Tag from 'primevue/tag'
 import Toolbar from 'primevue/toolbar'
 
 import { useAuth } from '../auth'
+import HelpDrawer from '../components/HelpDrawer.vue'
 import {
   fetchProviders,
   formatApiError,
@@ -24,6 +25,12 @@ import {
   saveProviderSecret,
   type ProviderItem,
 } from '../api'
+import {
+  enabledSeverity,
+  formatEnabled,
+  formatSecretConfigured,
+  secretSeverity,
+} from '../display'
 
 const { activeTenantId, canWriteActiveTenant } = useAuth()
 const loading = ref(true)
@@ -35,6 +42,7 @@ const filters = ref({
 })
 const dialogVisible = ref(false)
 const secretDialogVisible = ref(false)
+const helpVisible = ref(false)
 const selectedProvider = ref<ProviderItem | null>(null)
 const form = ref({
   code: '',
@@ -60,7 +68,7 @@ async function loadProviders() {
   try {
     items.value = await fetchProviders(activeTenantId.value)
   } catch (error) {
-    errorMessage.value = formatApiError(error, 'Не удалось загрузить providers')
+    errorMessage.value = formatApiError(error, 'Не удалось загрузить провайдеры')
   } finally {
     loading.value = false
   }
@@ -118,7 +126,7 @@ async function submitProvider() {
     dialogVisible.value = false
     await loadProviders()
   } catch (error) {
-    errorMessage.value = formatApiError(error, 'Не удалось сохранить provider')
+    errorMessage.value = formatApiError(error, 'Не удалось сохранить провайдера')
   } finally {
     saving.value = false
   }
@@ -137,7 +145,7 @@ async function submitSecret() {
     secretDialogVisible.value = false
     await loadProviders()
   } catch (error) {
-    errorMessage.value = formatApiError(error, 'Не удалось сохранить provider secret')
+    errorMessage.value = formatApiError(error, 'Не удалось сохранить ключ провайдера')
   } finally {
     saving.value = false
   }
@@ -159,13 +167,14 @@ watch(activeTenantId, loadProviders)
         <Toolbar class="mb-6">
           <template #start>
             <div>
-              <h4 class="m-0">Providers</h4>
-              <div class="text-muted mt-4">Provider-конфигурация выбранного tenant</div>
+              <h4 class="m-0">Провайдеры</h4>
+              <div class="text-muted mt-4">Подключения к внешним AI API выбранной организации</div>
             </div>
           </template>
 
           <template #end>
             <div class="flex flex-wrap gap-3">
+              <Button label="Справка" icon="pi pi-question-circle" severity="secondary" outlined @click="helpVisible = true" />
               <Button label="Создать" icon="pi pi-plus" :disabled="!canWriteActiveTenant" @click="openCreateDialog" />
               <Button label="Обновить" icon="pi pi-refresh" severity="secondary" @click="loadProviders" />
             </div>
@@ -202,24 +211,24 @@ watch(activeTenantId, loadProviders)
             </div>
           </template>
 
-          <Column field="code" header="Code" sortable style="min-width: 10rem" />
-          <Column field="kind" header="Kind" sortable style="min-width: 12rem" />
-          <Column field="base_url" header="Base URL" sortable style="min-width: 18rem" />
-          <Column field="api_key_configured" header="Secret" sortable style="min-width: 10rem">
+          <Column field="code" header="Код" sortable style="min-width: 10rem" />
+          <Column field="kind" header="Тип" sortable style="min-width: 12rem" />
+          <Column field="base_url" header="Базовый адрес" sortable style="min-width: 18rem" />
+          <Column field="api_key_configured" header="API-ключ" sortable style="min-width: 10rem">
             <template #body="{ data }">
               <Tag
-                :value="data.api_key_configured ? 'configured' : 'missing'"
-                :severity="data.api_key_configured ? 'success' : 'warn'"
+                :value="formatSecretConfigured(data.api_key_configured)"
+                :severity="secretSeverity(data.api_key_configured)"
               />
             </template>
           </Column>
-          <Column field="timeout_ms" header="Timeout ms" sortable style="min-width: 10rem" />
-          <Column field="is_enabled" header="Enabled" sortable style="min-width: 10rem">
+          <Column field="timeout_ms" header="Таймаут, мс" sortable style="min-width: 10rem" />
+          <Column field="is_enabled" header="Статус" sortable style="min-width: 10rem">
             <template #body="{ data }">
-              <Tag :value="data.is_enabled ? 'enabled' : 'disabled'" :severity="data.is_enabled ? 'success' : 'danger'" />
+              <Tag :value="formatEnabled(data.is_enabled)" :severity="enabledSeverity(data.is_enabled)" />
             </template>
           </Column>
-          <Column field="updated_at" header="Updated" sortable style="min-width: 12rem">
+          <Column field="updated_at" header="Обновлено" sortable style="min-width: 12rem">
             <template #body="{ data }">
               {{ formatDateTime(data.updated_at) }}
             </template>
@@ -228,7 +237,7 @@ watch(activeTenantId, loadProviders)
             <template #body="{ data }">
               <div class="flex gap-2">
                 <Button icon="pi pi-pencil" rounded outlined severity="secondary" aria-label="Изменить" :disabled="!canWriteActiveTenant" @click="openEditDialog(data)" />
-                <Button icon="pi pi-lock" rounded outlined severity="secondary" aria-label="Secret" :disabled="!canWriteActiveTenant" @click="openSecretDialog(data)" />
+                <Button icon="pi pi-lock" rounded outlined severity="secondary" aria-label="API-ключ" :disabled="!canWriteActiveTenant" @click="openSecretDialog(data)" />
               </div>
             </template>
           </Column>
@@ -237,31 +246,31 @@ watch(activeTenantId, loadProviders)
     </div>
   </div>
 
-  <Dialog v-model:visible="dialogVisible" modal header="Provider" class="admin-dialog">
+  <Dialog v-model:visible="dialogVisible" modal header="Провайдер" class="admin-dialog">
     <form class="admin-form" @submit.prevent="submitProvider">
       <div class="field">
-        <label for="providerCode">Code</label>
+        <label for="providerCode">Код</label>
         <InputText id="providerCode" v-model="form.code" :disabled="Boolean(selectedProvider)" />
       </div>
       <div class="field">
-        <label for="providerKind">Kind</label>
+        <label for="providerKind">Тип</label>
         <InputText id="providerKind" v-model="form.kind" />
       </div>
       <div class="field">
-        <label for="providerBaseUrl">Base URL</label>
+        <label for="providerBaseUrl">Базовый адрес</label>
         <InputText id="providerBaseUrl" v-model="form.base_url" />
       </div>
       <div class="field">
-        <label for="providerTimeout">Timeout ms</label>
+        <label for="providerTimeout">Таймаут, мс</label>
         <InputNumber id="providerTimeout" v-model="form.timeout_ms" :min="1" :step="1000" show-buttons />
       </div>
       <div class="field checkbox-field">
         <Checkbox v-model="form.is_enabled" input-id="providerEnabled" binary />
-        <label for="providerEnabled">Enabled</label>
+        <label for="providerEnabled">Включён</label>
       </div>
       <div class="field">
-        <label for="providerApiKey">API key</label>
-        <Password id="providerApiKey" v-model="form.api_key" :feedback="false" toggle-mask placeholder="Не менять secret" />
+        <label for="providerApiKey">API-ключ</label>
+        <Password id="providerApiKey" v-model="form.api_key" :feedback="false" toggle-mask placeholder="Не менять ключ" />
       </div>
       <div class="flex justify-end gap-3">
         <Button type="button" label="Отмена" severity="secondary" text @click="dialogVisible = false" />
@@ -270,10 +279,10 @@ watch(activeTenantId, loadProviders)
     </form>
   </Dialog>
 
-  <Dialog v-model:visible="secretDialogVisible" modal header="Provider secret" class="admin-dialog">
+  <Dialog v-model:visible="secretDialogVisible" modal header="Ключ провайдера" class="admin-dialog">
     <form class="admin-form" @submit.prevent="submitSecret">
       <div class="field">
-        <label for="providerSecret">API key</label>
+        <label for="providerSecret">API-ключ</label>
         <Password id="providerSecret" v-model="secretValue" :feedback="false" toggle-mask autofocus />
       </div>
       <div class="flex justify-end gap-3">
@@ -282,4 +291,53 @@ watch(activeTenantId, loadProviders)
       </div>
     </form>
   </Dialog>
+
+  <HelpDrawer v-model:visible="helpVisible" header="Справка: провайдеры">
+    <section>
+      <h5>Что это</h5>
+      <p>
+        Провайдер — это подключение шлюза к внешнему AI API. В маршрутах моделей вы выбираете
+        провайдера по его коду, а шлюз уже сам отправляет запрос во внешний сервис.
+      </p>
+    </section>
+
+    <section>
+      <h5>Как используется</h5>
+      <p>
+        Клиент не знает адрес провайдера и не передаёт его ключ. Клиент отправляет запрос в AI Gateway,
+        а шлюз берёт нужный провайдер из маршрута модели.
+      </p>
+    </section>
+
+    <section>
+      <h5>Поля</h5>
+      <dl class="help-list">
+        <div>
+          <dt>Код</dt>
+          <dd>Короткое внутреннее имя, например <span class="code-value">openai</span>.</dd>
+        </div>
+        <div>
+          <dt>Тип</dt>
+          <dd>Адаптер, который понимает API провайдера. Сейчас для OpenAI, DeepSeek и совместимых API используйте <span class="code-value">openai-compatible</span>.</dd>
+        </div>
+        <div>
+          <dt>Базовый адрес</dt>
+          <dd>Адрес API без <span class="code-value">/chat/completions</span>. Для OpenAI это <span class="code-value">https://api.openai.com/v1</span>.</dd>
+        </div>
+        <div>
+          <dt>API-ключ</dt>
+          <dd>Ключ внешнего сервиса. При редактировании оставьте поле пустым, если ключ менять не нужно.</dd>
+        </div>
+      </dl>
+    </section>
+
+    <section>
+      <h5>Пример заполнения</h5>
+      <pre class="preview-surface help-example">Код: openai
+Тип: openai-compatible
+Базовый адрес: https://api.openai.com/v1
+Таймаут, мс: 60000
+Включён: да</pre>
+    </section>
+  </HelpDrawer>
 </template>

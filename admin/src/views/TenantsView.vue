@@ -14,6 +14,7 @@ import Toolbar from 'primevue/toolbar'
 
 import { useAuth } from '../auth'
 import { createTenant, formatApiError, formatDateTime, type TenantItem } from '../api'
+import { formatTenantRole } from '../display'
 
 const { user, tenants, activeTenantId, setActiveTenant, reloadTenants } = useAuth()
 const loading = ref(false)
@@ -35,7 +36,7 @@ async function loadTenants() {
   try {
     await reloadTenants()
   } catch (error) {
-    errorMessage.value = formatApiError(error, 'Не удалось загрузить tenants')
+    errorMessage.value = formatApiError(error, 'Не удалось загрузить организации')
   } finally {
     loading.value = false
   }
@@ -64,7 +65,7 @@ async function submitTenant() {
     setActiveTenant(tenant.id)
     dialogVisible.value = false
   } catch (error) {
-    errorMessage.value = formatApiError(error, 'Не удалось создать tenant')
+    errorMessage.value = formatApiError(error, 'Не удалось создать организацию')
   } finally {
     saving.value = false
   }
@@ -89,8 +90,8 @@ onMounted(loadTenants)
         <Toolbar class="mb-6">
           <template #start>
             <div>
-              <h4 class="m-0">Tenants</h4>
-              <div class="text-muted mt-4">Клиенты, инсталляции и организации gateway</div>
+              <h4 class="m-0">Организации</h4>
+              <div class="text-muted mt-4">Клиенты, инсталляции и изолированные контуры шлюза</div>
             </div>
           </template>
 
@@ -132,14 +133,14 @@ onMounted(loadTenants)
             </div>
           </template>
 
-          <Column field="name" header="Name" sortable style="min-width: 14rem" />
-          <Column field="slug" header="Slug" sortable style="min-width: 12rem" />
-          <Column field="role" header="Role" sortable style="min-width: 10rem">
+          <Column field="name" header="Название" sortable style="min-width: 14rem" />
+          <Column field="slug" header="Короткое имя" sortable style="min-width: 12rem" />
+          <Column field="role" header="Роль" sortable style="min-width: 10rem">
             <template #body="{ data }">
-              <Tag :value="data.role" :severity="roleSeverity(data.role)" />
+              <Tag :value="formatTenantRole(data.role)" :severity="roleSeverity(data.role)" />
             </template>
           </Column>
-          <Column field="updated_at" header="Updated" sortable style="min-width: 12rem">
+          <Column field="updated_at" header="Обновлено" sortable style="min-width: 12rem">
             <template #body="{ data }">
               {{ formatDateTime(data.updated_at) }}
             </template>
@@ -160,15 +161,15 @@ onMounted(loadTenants)
     </div>
   </div>
 
-  <Dialog v-model:visible="dialogVisible" modal header="Tenant" class="admin-dialog">
+  <Dialog v-model:visible="dialogVisible" modal header="Организация" class="admin-dialog">
     <form class="admin-form" @submit.prevent="submitTenant">
       <div class="field">
-        <label for="tenantName">Name</label>
+        <label for="tenantName">Название</label>
         <InputText id="tenantName" v-model="tenantName" autofocus />
       </div>
       <div class="field">
-        <label for="tenantSlug">Slug</label>
-        <InputText id="tenantSlug" v-model="tenantSlug" placeholder="Опционально" />
+        <label for="tenantSlug">Короткое имя</label>
+        <InputText id="tenantSlug" v-model="tenantSlug" placeholder="Необязательно" />
       </div>
       <div class="flex justify-end gap-3">
         <Button type="button" label="Отмена" severity="secondary" text @click="dialogVisible = false" />

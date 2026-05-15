@@ -18,6 +18,7 @@ import {
   type GenerateResponse,
   type ModelRouteItem,
 } from '../api'
+import { formatFinishReason } from '../display'
 
 const { activeTenantId } = useAuth()
 const routesLoading = ref(true)
@@ -25,7 +26,7 @@ const routesError = ref('')
 const routes = ref<ModelRouteItem[]>([])
 const model = ref('')
 const systemPrompt = ref('')
-const userPrompt = ref('Скажи коротко: gateway работает?')
+const userPrompt = ref('Скажи коротко: шлюз работает?')
 const temperature = ref<number | null>(0.2)
 const maxTokens = ref<number | null>(128)
 const sending = ref(false)
@@ -55,7 +56,7 @@ async function loadRoutes() {
     routes.value = await fetchModelRoutes(activeTenantId.value)
     model.value ||= enabledRoutes.value[0]?.alias ?? ''
   } catch (error) {
-    routesError.value = formatApiError(error, 'Не удалось загрузить model routes')
+    routesError.value = formatApiError(error, 'Не удалось загрузить маршруты моделей')
   } finally {
     routesLoading.value = false
   }
@@ -94,7 +95,7 @@ async function sendRequest() {
 
   try {
     if (!activeTenantId.value) {
-      throw new Error('Tenant не выбран')
+      throw new Error('Организация не выбрана')
     }
 
     response.value = await generateText(activeTenantId.value, {
@@ -104,7 +105,7 @@ async function sendRequest() {
     })
     latencyMs.value = Math.round(performance.now() - startedAt)
   } catch (error) {
-    errorMessage.value = formatApiError(error, 'Запрос к gateway не удался')
+    errorMessage.value = formatApiError(error, 'Запрос к шлюзу не удался')
   } finally {
     sending.value = false
   }
@@ -128,7 +129,7 @@ watch(activeTenantId, loadRoutes)
           <div class="admin-section-header">
             <div>
               <h4>Проверка генерации</h4>
-              <div class="text-muted">Ручной smoke-test полного маршрута через gateway</div>
+              <div class="text-muted">Ручная проверка полного маршрута через шлюз</div>
             </div>
           </div>
 
@@ -138,7 +139,7 @@ watch(activeTenantId, loadRoutes)
 
           <form class="admin-form" @submit.prevent="sendRequest">
             <div class="field">
-              <label for="model">Model alias</label>
+              <label for="model">Алиас модели</label>
               <Select
                 id="model"
                 v-model="model"
@@ -148,24 +149,24 @@ watch(activeTenantId, loadRoutes)
                 editable
                 filter
                 :loading="routesLoading"
-                placeholder="Выберите или введите alias"
+                placeholder="Выберите или введите алиас"
               />
             </div>
 
             <div class="field">
-              <label for="systemPrompt">System</label>
+              <label for="systemPrompt">Системная инструкция</label>
               <Textarea id="systemPrompt" v-model="systemPrompt" rows="3" auto-resize />
             </div>
 
             <div class="field">
-              <label for="userPrompt">User</label>
+              <label for="userPrompt">Пользовательский запрос</label>
               <Textarea id="userPrompt" v-model="userPrompt" rows="8" auto-resize />
             </div>
 
             <div class="grid grid-cols-12 gap-4">
               <div class="col-span-12 md:col-span-6">
                 <div class="field">
-                  <label for="temperature">Temperature</label>
+                  <label for="temperature">Температура</label>
                   <InputNumber
                     id="temperature"
                     v-model="temperature"
@@ -181,7 +182,7 @@ watch(activeTenantId, loadRoutes)
 
               <div class="col-span-12 md:col-span-6">
                 <div class="field">
-                  <label for="maxTokens">Max tokens</label>
+                  <label for="maxTokens">Максимум токенов</label>
                   <InputNumber id="maxTokens" v-model="maxTokens" :min="1" :step="1" show-buttons />
                 </div>
               </div>
@@ -200,12 +201,12 @@ watch(activeTenantId, loadRoutes)
           <div class="admin-section-header">
             <div>
               <h4>Ответ</h4>
-              <div class="text-muted">Текст, маршрут и usage по последнему вызову</div>
+              <div class="text-muted">Текст, маршрут и расход токенов по последнему вызову</div>
             </div>
 
             <div v-if="response" class="response-meta">
               <Tag :value="response.provider" severity="info" />
-              <Tag :value="response.finish_reason" severity="success" />
+              <Tag :value="formatFinishReason(response.finish_reason)" severity="success" />
             </div>
           </div>
 
@@ -222,19 +223,19 @@ watch(activeTenantId, loadRoutes)
 
             <dl class="summary-grid mt-4">
               <div class="summary-item">
-                <dt>Request ID</dt>
+                <dt>ID запроса</dt>
                 <dd class="code-value">{{ response.id }}</dd>
               </div>
               <div class="summary-item">
-                <dt>Model</dt>
+                <dt>Модель</dt>
                 <dd>{{ response.model }}</dd>
               </div>
               <div class="summary-item">
-                <dt>Latency</dt>
+                <dt>Задержка</dt>
                 <dd>{{ latencyMs ?? '-' }} ms</dd>
               </div>
               <div class="summary-item">
-                <dt>Tokens</dt>
+                <dt>Токены</dt>
                 <dd>{{ response.usage?.input_tokens ?? '-' }} / {{ response.usage?.output_tokens ?? '-' }}</dd>
               </div>
             </dl>

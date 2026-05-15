@@ -9,6 +9,7 @@ import Toolbar from 'primevue/toolbar'
 
 import { useAuth } from '../auth'
 import { fetchRequestDetails, formatApiError, formatDateTime, severityForStatus, type RequestDetails } from '../api'
+import { formatRequestStatus } from '../display'
 
 const route = useRoute()
 const { activeTenantId } = useAuth()
@@ -23,7 +24,7 @@ async function loadRequest() {
   errorMessage.value = ''
 
   if (!activeTenantId.value) {
-    errorMessage.value = 'Tenant не выбран'
+    errorMessage.value = 'Организация не выбрана'
     loading.value = false
     return
   }
@@ -74,7 +75,7 @@ onMounted(loadRequest)
               <h4>Детали запроса</h4>
               <div class="text-muted">Маршрут, статус и сохранённые метрики вызова</div>
             </div>
-            <Tag :value="item.status" :severity="severityForStatus(item.status)" />
+            <Tag :value="formatRequestStatus(item.status)" :severity="severityForStatus(item.status)" />
           </div>
 
           <dl class="summary-grid">
@@ -83,31 +84,31 @@ onMounted(loadRequest)
               <dd>{{ formatDateTime(item.created_at) }}</dd>
             </div>
             <div class="summary-item">
-              <dt>Alias</dt>
+              <dt>Алиас</dt>
               <dd>{{ item.model_alias }}</dd>
             </div>
             <div class="summary-item">
-              <dt>Provider</dt>
+              <dt>Провайдер</dt>
               <dd>{{ item.provider_code ?? '-' }}</dd>
             </div>
             <div class="summary-item">
-              <dt>Client</dt>
-              <dd>{{ item.gateway_client_name ?? 'admin' }}</dd>
+              <dt>Клиент</dt>
+              <dd>{{ item.gateway_client_name ?? 'админ-панель' }}</dd>
             </div>
             <div class="summary-item">
               <dt>Модель</dt>
               <dd>{{ item.external_model ?? '-' }}</dd>
             </div>
             <div class="summary-item">
-              <dt>Latency</dt>
+              <dt>Задержка</dt>
               <dd>{{ item.latency_ms ?? '-' }} ms</dd>
             </div>
             <div class="summary-item">
-              <dt>Input tokens</dt>
+              <dt>Входные токены</dt>
               <dd>{{ item.input_tokens ?? '-' }}</dd>
             </div>
             <div class="summary-item">
-              <dt>Output tokens</dt>
+              <dt>Выходные токены</dt>
               <dd>{{ item.output_tokens ?? '-' }}</dd>
             </div>
           </dl>
@@ -122,14 +123,14 @@ onMounted(loadRequest)
     <template v-if="item && !loading && !errorMessage">
       <div class="col-span-12 xl:col-span-6">
         <div class="card">
-          <div class="font-semibold text-xl mb-4">Prompt preview</div>
+          <div class="font-semibold text-xl mb-4">Текст запроса</div>
           <pre class="preview-surface">{{ item.prompt_preview ?? 'Нет данных' }}</pre>
         </div>
       </div>
 
       <div class="col-span-12 xl:col-span-6">
         <div class="card">
-          <div class="font-semibold text-xl mb-4">Response preview</div>
+          <div class="font-semibold text-xl mb-4">Текст ответа</div>
           <pre class="preview-surface">{{ item.response_preview ?? 'Нет данных' }}</pre>
         </div>
       </div>

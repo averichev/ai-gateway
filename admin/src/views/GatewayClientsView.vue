@@ -20,6 +20,7 @@ import {
   formatDateTime,
   type GatewayClientItem,
 } from '../api'
+import { enabledSeverity, formatEnabled } from '../display'
 
 const { activeTenantId, canWriteActiveTenant } = useAuth()
 const loading = ref(true)
@@ -48,7 +49,7 @@ async function loadClients() {
   try {
     items.value = await fetchGatewayClients(activeTenantId.value)
   } catch (error) {
-    errorMessage.value = formatApiError(error, 'Не удалось загрузить gateway clients')
+    errorMessage.value = formatApiError(error, 'Не удалось загрузить клиентов шлюза')
   } finally {
     loading.value = false
   }
@@ -75,7 +76,7 @@ async function submitClient() {
     tokenDialogVisible.value = true
     await loadClients()
   } catch (error) {
-    errorMessage.value = formatApiError(error, 'Не удалось создать gateway client')
+    errorMessage.value = formatApiError(error, 'Не удалось создать клиента шлюза')
   } finally {
     saving.value = false
   }
@@ -92,8 +93,8 @@ watch(activeTenantId, loadClients)
         <Toolbar class="mb-6">
           <template #start>
             <div>
-              <h4 class="m-0">Gateway Clients</h4>
-              <div class="text-muted mt-4">Machine tokens для Factum backend выбранного tenant</div>
+              <h4 class="m-0">Клиенты шлюза</h4>
+              <div class="text-muted mt-4">Машинные токены для бэкенда выбранной организации</div>
             </div>
           </template>
 
@@ -135,23 +136,23 @@ watch(activeTenantId, loadClients)
             </div>
           </template>
 
-          <Column field="name" header="Name" sortable style="min-width: 14rem" />
-          <Column field="token_prefix" header="Token prefix" sortable style="min-width: 12rem">
+          <Column field="name" header="Название" sortable style="min-width: 14rem" />
+          <Column field="token_prefix" header="Префикс токена" sortable style="min-width: 12rem">
             <template #body="{ data }">
               <span class="code-value">{{ data.token_prefix }}...</span>
             </template>
           </Column>
-          <Column field="is_enabled" header="Enabled" sortable style="min-width: 10rem">
+          <Column field="is_enabled" header="Статус" sortable style="min-width: 10rem">
             <template #body="{ data }">
-              <Tag :value="data.is_enabled ? 'enabled' : 'disabled'" :severity="data.is_enabled ? 'success' : 'danger'" />
+              <Tag :value="formatEnabled(data.is_enabled)" :severity="enabledSeverity(data.is_enabled)" />
             </template>
           </Column>
-          <Column field="last_used_at" header="Last used" sortable style="min-width: 12rem">
+          <Column field="last_used_at" header="Последнее использование" sortable style="min-width: 12rem">
             <template #body="{ data }">
               {{ formatDateTime(data.last_used_at) }}
             </template>
           </Column>
-          <Column field="created_at" header="Created" sortable style="min-width: 12rem">
+          <Column field="created_at" header="Создан" sortable style="min-width: 12rem">
             <template #body="{ data }">
               {{ formatDateTime(data.created_at) }}
             </template>
@@ -161,10 +162,10 @@ watch(activeTenantId, loadClients)
     </div>
   </div>
 
-  <Dialog v-model:visible="dialogVisible" modal header="Gateway client" class="admin-dialog">
+  <Dialog v-model:visible="dialogVisible" modal header="Клиент шлюза" class="admin-dialog">
     <form class="admin-form" @submit.prevent="submitClient">
       <div class="field">
-        <label for="clientName">Name</label>
+        <label for="clientName">Название</label>
         <InputText id="clientName" v-model="clientName" autofocus />
       </div>
       <div class="flex justify-end gap-3">
@@ -174,9 +175,9 @@ watch(activeTenantId, loadClients)
     </form>
   </Dialog>
 
-  <Dialog v-model:visible="tokenDialogVisible" modal header="Machine token" class="admin-dialog">
+  <Dialog v-model:visible="tokenDialogVisible" modal header="Токен клиента" class="admin-dialog">
     <Message severity="warn" :closable="false" class="mb-4">
-      Token показывается один раз. В БД сохранён только hash.
+      Токен показывается один раз. В базе хранится только хэш.
     </Message>
     <pre class="preview-surface token-preview">{{ createdToken }}</pre>
     <div class="flex justify-end mt-4">

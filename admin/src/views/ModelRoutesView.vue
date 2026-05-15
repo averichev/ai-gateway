@@ -15,6 +15,7 @@ import Tag from 'primevue/tag'
 import Toolbar from 'primevue/toolbar'
 
 import { useAuth } from '../auth'
+import HelpDrawer from '../components/HelpDrawer.vue'
 import {
   fetchModelRoutes,
   fetchProviders,
@@ -24,6 +25,7 @@ import {
   type ModelRouteItem,
   type ProviderItem,
 } from '../api'
+import { enabledSeverity, formatEnabled } from '../display'
 
 const { activeTenantId, canWriteActiveTenant } = useAuth()
 const loading = ref(true)
@@ -35,6 +37,7 @@ const filters = ref({
   global: { value: null as string | null, matchMode: FilterMatchMode.CONTAINS },
 })
 const dialogVisible = ref(false)
+const helpVisible = ref(false)
 const selectedRoute = ref<ModelRouteItem | null>(null)
 const form = ref({
   alias: 'smart-default',
@@ -67,7 +70,7 @@ async function loadModelRoutes() {
     items.value = routesResult
     providers.value = providersResult
   } catch (error) {
-    errorMessage.value = formatApiError(error, 'Не удалось загрузить model routes')
+    errorMessage.value = formatApiError(error, 'Не удалось загрузить маршруты моделей')
   } finally {
     loading.value = false
   }
@@ -113,7 +116,7 @@ async function submitRoute() {
     dialogVisible.value = false
     await loadModelRoutes()
   } catch (error) {
-    errorMessage.value = formatApiError(error, 'Не удалось сохранить model route')
+    errorMessage.value = formatApiError(error, 'Не удалось сохранить маршрут модели')
   } finally {
     saving.value = false
   }
@@ -130,13 +133,14 @@ watch(activeTenantId, loadModelRoutes)
         <Toolbar class="mb-6">
           <template #start>
             <div>
-              <h4 class="m-0">Model Routes</h4>
-              <div class="text-muted mt-4">Alias-маршруты выбранного tenant</div>
+              <h4 class="m-0">Маршруты моделей</h4>
+              <div class="text-muted mt-4">Связь внутренних алиасов с внешними моделями</div>
             </div>
           </template>
 
           <template #end>
             <div class="flex flex-wrap gap-3">
+              <Button label="Справка" icon="pi pi-question-circle" severity="secondary" outlined @click="helpVisible = true" />
               <Button label="Создать" icon="pi pi-plus" :disabled="!canWriteActiveTenant" @click="openCreateDialog" />
               <Button label="Обновить" icon="pi pi-refresh" severity="secondary" @click="loadModelRoutes" />
             </div>
@@ -173,15 +177,15 @@ watch(activeTenantId, loadModelRoutes)
             </div>
           </template>
 
-          <Column field="alias" header="Alias" sortable style="min-width: 12rem" />
-          <Column field="provider_code" header="Provider" sortable style="min-width: 12rem" />
-          <Column field="external_model" header="External model" sortable style="min-width: 16rem" />
-          <Column field="is_enabled" header="Enabled" sortable style="min-width: 10rem">
+          <Column field="alias" header="Алиас" sortable style="min-width: 12rem" />
+          <Column field="provider_code" header="Провайдер" sortable style="min-width: 12rem" />
+          <Column field="external_model" header="Внешняя модель" sortable style="min-width: 16rem" />
+          <Column field="is_enabled" header="Статус" sortable style="min-width: 10rem">
             <template #body="{ data }">
-              <Tag :value="data.is_enabled ? 'enabled' : 'disabled'" :severity="data.is_enabled ? 'success' : 'danger'" />
+              <Tag :value="formatEnabled(data.is_enabled)" :severity="enabledSeverity(data.is_enabled)" />
             </template>
           </Column>
-          <Column field="updated_at" header="Updated" sortable style="min-width: 12rem">
+          <Column field="updated_at" header="Обновлено" sortable style="min-width: 12rem">
             <template #body="{ data }">
               {{ formatDateTime(data.updated_at) }}
             </template>
@@ -196,14 +200,14 @@ watch(activeTenantId, loadModelRoutes)
     </div>
   </div>
 
-  <Dialog v-model:visible="dialogVisible" modal header="Model route" class="admin-dialog">
+  <Dialog v-model:visible="dialogVisible" modal header="Маршрут модели" class="admin-dialog">
     <form class="admin-form" @submit.prevent="submitRoute">
       <div class="field">
-        <label for="routeAlias">Alias</label>
+        <label for="routeAlias">Алиас</label>
         <InputText id="routeAlias" v-model="form.alias" />
       </div>
       <div class="field">
-        <label for="routeProvider">Provider</label>
+        <label for="routeProvider">Провайдер</label>
         <Select
           id="routeProvider"
           v-model="form.provider_code"
@@ -212,16 +216,16 @@ watch(activeTenantId, loadModelRoutes)
           option-value="value"
           editable
           filter
-          placeholder="Provider code"
+          placeholder="Код провайдера"
         />
       </div>
       <div class="field">
-        <label for="routeExternalModel">External model</label>
+        <label for="routeExternalModel">Внешняя модель</label>
         <InputText id="routeExternalModel" v-model="form.external_model" />
       </div>
       <div class="field checkbox-field">
         <Checkbox v-model="form.is_enabled" input-id="routeEnabled" binary />
-        <label for="routeEnabled">Enabled</label>
+        <label for="routeEnabled">Включён</label>
       </div>
       <div class="flex justify-end gap-3">
         <Button type="button" label="Отмена" severity="secondary" text @click="dialogVisible = false" />
@@ -229,4 +233,68 @@ watch(activeTenantId, loadModelRoutes)
       </div>
     </form>
   </Dialog>
+
+  <HelpDrawer v-model:visible="helpVisible" header="Справка: маршруты моделей">
+    <section>
+      <h5>Что это</h5>
+      <p>
+        Маршрут модели связывает короткое внутреннее имя с реальной моделью у провайдера.
+        Это даёт возможность менять внешнюю модель без изменений в клиентских приложениях.
+      </p>
+    </section>
+
+    <section>
+      <h5>Как используется</h5>
+      <p>
+        Клиент отправляет в <span class="code-value">POST /api/v1/generate</span> поле
+        <span class="code-value">model</span> с алиасом. Шлюз находит маршрут, выбирает
+        провайдера и отправляет ему запрос с внешним именем модели.
+      </p>
+    </section>
+
+    <section>
+      <h5>Поля</h5>
+      <dl class="help-list">
+        <div>
+          <dt>Алиас</dt>
+          <dd>Имя для ваших клиентов, например <span class="code-value">smart-default</span>. Не привязывайте его к названию конкретной внешней модели.</dd>
+        </div>
+        <div>
+          <dt>Провайдер</dt>
+          <dd>Код уже созданного провайдера, например <span class="code-value">openai</span>.</dd>
+        </div>
+        <div>
+          <dt>Внешняя модель</dt>
+          <dd>Точное имя модели у провайдера, например <span class="code-value">gpt-4o-mini</span> или <span class="code-value">deepseek-chat</span>.</dd>
+        </div>
+        <div>
+          <dt>Включён</dt>
+          <dd>Выключенный маршрут не используется при генерации.</dd>
+        </div>
+      </dl>
+    </section>
+
+    <section>
+      <h5>Пример заполнения</h5>
+      <pre class="preview-surface help-example">Алиас: smart-default
+Провайдер: openai
+Внешняя модель: gpt-4o-mini
+Включён: да</pre>
+    </section>
+
+    <section>
+      <h5>Пример запроса клиента</h5>
+      <pre class="preview-surface help-example">POST /api/v1/generate
+{
+  "model": "smart-default",
+  "messages": [
+    { "role": "user", "content": "Коротко объясни, что делает AI Gateway." }
+  ],
+  "options": {
+    "temperature": 0.2,
+    "max_tokens": 200
+  }
+}</pre>
+    </section>
+  </HelpDrawer>
 </template>

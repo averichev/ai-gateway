@@ -18,7 +18,7 @@ const sending = ref(false)
 const hasUsers = ref(true)
 const email = ref('')
 const password = ref('')
-const tenantName = ref('Default tenant')
+const tenantName = ref('Основная организация')
 const errorMessage = ref('')
 const isSetupMode = computed(() => !hasUsers.value)
 const canSubmit = computed(() => Boolean(email.value.trim() && password.value.trim()))
@@ -31,7 +31,7 @@ async function loadBootstrapStatus() {
     const status = await fetchBootstrapStatus()
     hasUsers.value = status.has_users
   } catch (error) {
-    errorMessage.value = formatApiError(error, 'Не удалось проверить состояние gateway')
+    errorMessage.value = formatApiError(error, 'Не удалось проверить состояние шлюза')
   } finally {
     loading.value = false
   }
@@ -80,7 +80,7 @@ onMounted(loadBootstrapStatus)
         <div>
           <h2 class="m-0">{{ isSetupMode ? 'Первичная регистрация' : 'Вход' }}</h2>
           <div class="text-muted mt-4">
-            {{ isSetupMode ? 'Первый пользователь станет owner' : 'Свободная регистрация закрыта' }}
+            {{ isSetupMode ? 'Первый пользователь станет владельцем' : 'Свободная регистрация закрыта' }}
           </div>
         </div>
 
@@ -89,12 +89,12 @@ onMounted(loadBootstrapStatus)
         </Message>
 
         <div class="field">
-          <label for="email">Email</label>
+          <label for="email">Почта</label>
           <InputText id="email" v-model="email" type="email" autofocus autocomplete="username" />
         </div>
 
         <div class="field">
-          <label for="password">Password</label>
+          <label for="password">Пароль</label>
           <Password
             id="password"
             v-model="password"
@@ -105,13 +105,13 @@ onMounted(loadBootstrapStatus)
         </div>
 
         <div v-if="isSetupMode" class="field">
-          <label for="tenantName">Initial tenant</label>
+          <label for="tenantName">Первая организация</label>
           <InputText id="tenantName" v-model="tenantName" />
         </div>
 
         <Button
           type="submit"
-          :label="isSetupMode ? 'Создать owner' : 'Войти'"
+          :label="isSetupMode ? 'Создать владельца' : 'Войти'"
           icon="pi pi-sign-in"
           class="w-full"
           :loading="sending"

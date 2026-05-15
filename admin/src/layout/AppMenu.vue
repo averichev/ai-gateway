@@ -6,7 +6,7 @@ import type { MenuSection } from './menu'
 
 const model = ref<MenuSection[]>([
   {
-    label: 'Gateway',
+    label: 'Шлюз',
     items: [
       {
         label: 'Запросы',
@@ -24,27 +24,27 @@ const model = ref<MenuSection[]>([
     label: 'Конфигурация',
     items: [
       {
-        label: 'Providers',
+        label: 'Провайдеры',
         icon: 'pi pi-fw pi-server',
         to: '/providers',
       },
       {
-        label: 'Model Routes',
+        label: 'Маршруты моделей',
         icon: 'pi pi-fw pi-sitemap',
         to: '/model-routes',
       },
       {
-        label: 'Gateway Clients',
+        label: 'Клиенты шлюза',
         icon: 'pi pi-fw pi-key',
         to: '/gateway-clients',
       },
       {
-        label: 'Tenants',
+        label: 'Организации',
         icon: 'pi pi-fw pi-building',
         to: '/tenants',
       },
       {
-        label: 'Users',
+        label: 'Пользователи',
         icon: 'pi pi-fw pi-users',
         to: '/users',
       },

@@ -234,6 +234,54 @@
   width: min(34rem, calc(100vw - 2rem));
 }
 
+.admin-help-drawer {
+  width: min(34rem, 100vw);
+}
+
+.help-drawer-content {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  line-height: 1.55;
+}
+
+.help-drawer-content section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.help-drawer-content h5 {
+  margin: 0;
+  color: var(--text-color);
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.help-drawer-content p {
+  margin: 0;
+  color: var(--text-color-secondary);
+}
+
+.help-list {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0;
+}
+
+.help-list dt {
+  font-weight: 700;
+}
+
+.help-list dd {
+  margin: 0;
+  color: var(--text-color-secondary);
+}
+
+.preview-surface.help-example {
+  min-height: auto;
+}
+
 .summary-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));

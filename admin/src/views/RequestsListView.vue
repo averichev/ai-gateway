@@ -14,6 +14,7 @@ import Toolbar from 'primevue/toolbar'
 
 import { useAuth } from '../auth'
 import { fetchRequests, formatApiError, formatDateTime, severityForStatus, type RequestListItem } from '../api'
+import { formatRequestStatus } from '../display'
 
 const router = useRouter()
 const { activeTenantId } = useAuth()
@@ -59,7 +60,7 @@ watch(activeTenantId, loadRequests)
           <template #start>
             <div>
               <h4 class="m-0">Запросы</h4>
-              <div class="text-muted mt-4">Последние вызовы выбранного tenant</div>
+              <div class="text-muted mt-4">Последние вызовы выбранной организации</div>
             </div>
           </template>
 
@@ -104,22 +105,22 @@ watch(activeTenantId, loadRequests)
             </template>
           </Column>
 
-          <Column field="model_alias" header="Alias" sortable style="min-width: 10rem" />
-          <Column field="gateway_client_name" header="Client" sortable style="min-width: 12rem">
+          <Column field="model_alias" header="Алиас" sortable style="min-width: 10rem" />
+          <Column field="gateway_client_name" header="Клиент" sortable style="min-width: 12rem">
             <template #body="{ data }">
-              {{ data.gateway_client_name ?? 'admin' }}
+              {{ data.gateway_client_name ?? 'админ-панель' }}
             </template>
           </Column>
-          <Column field="provider_code" header="Provider" sortable style="min-width: 10rem" />
+          <Column field="provider_code" header="Провайдер" sortable style="min-width: 10rem" />
           <Column field="external_model" header="Модель" sortable style="min-width: 14rem" />
 
           <Column field="status" header="Статус" sortable style="min-width: 12rem">
             <template #body="{ data }">
-              <Tag :value="data.status" :severity="severityForStatus(data.status)" />
+              <Tag :value="formatRequestStatus(data.status)" :severity="severityForStatus(data.status)" />
             </template>
           </Column>
 
-          <Column field="latency_ms" header="Latency" sortable style="min-width: 9rem">
+          <Column field="latency_ms" header="Задержка, мс" sortable style="min-width: 9rem">
             <template #body="{ data }">
               {{ data.latency_ms ?? '-' }}
             </template>

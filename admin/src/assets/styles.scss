@@ -225,6 +225,13 @@
   color: var(--text-color);
 }
 
+.field-help {
+  margin: -0.125rem 0 0;
+  color: var(--text-color-secondary);
+  font-size: 0.875rem;
+  line-height: 1.4;
+}
+
 .checkbox-field {
   flex-direction: row;
   align-items: center;
@@ -339,6 +346,25 @@
 .code-value {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   overflow-wrap: anywhere;
+}
+
+.catalog-option {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.catalog-option-main {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.catalog-option-note {
+  color: var(--text-color-secondary);
 }
 
 .token-preview {

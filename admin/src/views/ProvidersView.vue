@@ -12,6 +12,7 @@ import InputNumber from 'primevue/inputnumber'
 import InputText from 'primevue/inputtext'
 import Message from 'primevue/message'
 import Password from 'primevue/password'
+import Select from 'primevue/select'
 import Tag from 'primevue/tag'
 import Toolbar from 'primevue/toolbar'
 
@@ -31,6 +32,12 @@ import {
   formatSecretConfigured,
   secretSeverity,
 } from '../display'
+import {
+  PROVIDER_CATALOG,
+  PROVIDER_CATALOG_LAST_REVIEWED,
+  findProviderCatalogByCode,
+  supportedProviderCatalogItems,
+} from '../providerCatalog'
 
 const { activeTenantId, canWriteActiveTenant } = useAuth()
 const loading = ref(true)
@@ -53,6 +60,23 @@ const form = ref({
   api_key: '',
 })
 const secretValue = ref('')
+const providerPresetOptions = computed(() =>
+  PROVIDER_CATALOG.map((provider) => ({
+    label:
+      provider.status === 'supported'
+        ? provider.name
+        : `${provider.name} · ${provider.statusText}`,
+    value: provider.code,
+    disabled: provider.status !== 'supported',
+  })),
+)
+const adapterKindOptions = computed(() => [
+  {
+    label: 'openai-compatible',
+    value: 'openai-compatible',
+  },
+])
+const selectedCatalogProvider = computed(() => findProviderCatalogByCode(form.value.code))
 const canSubmit = computed(() => Boolean(form.value.code.trim() && form.value.kind.trim() && form.value.base_url.trim()))
 
 async function loadProviders() {
@@ -75,11 +99,12 @@ async function loadProviders() {
 }
 
 function openCreateDialog() {
+  const defaultProvider = supportedProviderCatalogItems()[0]
   selectedProvider.value = null
   form.value = {
-    code: '',
-    kind: 'openai-compatible',
-    base_url: 'https://api.openai.com/v1',
+    code: defaultProvider?.code ?? '',
+    kind: defaultProvider?.kind ?? 'openai-compatible',
+    base_url: defaultProvider?.baseUrl ?? 'https://api.openai.com/v1',
     is_enabled: true,
     timeout_ms: 60000,
     api_key: '',
@@ -104,6 +129,21 @@ function openSecretDialog(provider: ProviderItem) {
   selectedProvider.value = provider
   secretValue.value = ''
   secretDialogVisible.value = true
+}
+
+function applyProviderPreset() {
+  if (selectedProvider.value) {
+    return
+  }
+
+  const provider = findProviderCatalogByCode(form.value.code)
+
+  if (!provider || provider.status !== 'supported') {
+    return
+  }
+
+  form.value.kind = provider.kind
+  form.value.base_url = provider.baseUrl
 }
 
 async function submitProvider() {
@@ -249,20 +289,77 @@ watch(activeTenantId, loadProviders)
   <Dialog v-model:visible="dialogVisible" modal header="Провайдер" class="admin-dialog">
     <form class="admin-form" @submit.prevent="submitProvider">
       <div class="field">
-        <label for="providerCode">Код</label>
-        <InputText id="providerCode" v-model="form.code" :disabled="Boolean(selectedProvider)" />
+        <label for="providerCode">Провайдер</label>
+        <Select
+          id="providerCode"
+          v-model="form.code"
+          :options="providerPresetOptions"
+          option-label="label"
+          option-value="value"
+          option-disabled="disabled"
+          editable
+          filter
+          :disabled="Boolean(selectedProvider)"
+          aria-describedby="providerCodeHelp"
+          placeholder="openai"
+          @change="applyProviderPreset"
+        />
+        <p id="providerCodeHelp" class="field-help">
+          Короткое внутреннее имя подключения. Для OpenAI и DeepSeek выберите готовый вариант,
+          для совместимого proxy можно ввести свой код вручную.
+        </p>
       </div>
       <div class="field">
         <label for="providerKind">Тип</label>
-        <InputText id="providerKind" v-model="form.kind" />
+        <Select
+          id="providerKind"
+          v-model="form.kind"
+          :options="adapterKindOptions"
+          option-label="label"
+          option-value="value"
+          editable
+          filter
+          aria-describedby="providerKindHelp"
+          placeholder="openai-compatible"
+        />
+        <p id="providerKindHelp" class="field-help">
+          Адаптер для формата внешнего API. Для OpenAI, DeepSeek и совместимых прокси используйте
+          <span class="code-value">openai-compatible</span>.
+        </p>
       </div>
+      <Message
+        v-if="selectedCatalogProvider?.status === 'planned'"
+        severity="warn"
+        :closable="false"
+      >
+        {{ selectedCatalogProvider.name }} есть в справочнике моделей, но текущий backend adapter
+        ещё не реализован. Такой провайдер не заработает через <span class="code-value">openai-compatible</span>.
+      </Message>
       <div class="field">
         <label for="providerBaseUrl">Базовый адрес</label>
-        <InputText id="providerBaseUrl" v-model="form.base_url" />
+        <InputText
+          id="providerBaseUrl"
+          v-model="form.base_url"
+          aria-describedby="providerBaseUrlHelp"
+          placeholder="https://api.openai.com/v1"
+        />
+        <p id="providerBaseUrlHelp" class="field-help">
+          Адрес API без <span class="code-value">/chat/completions</span>. Этот путь адаптер добавит сам.
+        </p>
       </div>
       <div class="field">
         <label for="providerTimeout">Таймаут, мс</label>
-        <InputNumber id="providerTimeout" v-model="form.timeout_ms" :min="1" :step="1000" show-buttons />
+        <InputNumber
+          id="providerTimeout"
+          v-model="form.timeout_ms"
+          :min="1"
+          :step="1000"
+          show-buttons
+          aria-describedby="providerTimeoutHelp"
+        />
+        <p id="providerTimeoutHelp" class="field-help">
+          Сколько шлюз ждёт ответ внешнего API. Обычно хватает 30000-60000 мс.
+        </p>
       </div>
       <div class="field checkbox-field">
         <Checkbox v-model="form.is_enabled" input-id="providerEnabled" binary />
@@ -270,7 +367,17 @@ watch(activeTenantId, loadProviders)
       </div>
       <div class="field">
         <label for="providerApiKey">API-ключ</label>
-        <Password id="providerApiKey" v-model="form.api_key" :feedback="false" toggle-mask placeholder="Не менять ключ" />
+        <Password
+          id="providerApiKey"
+          v-model="form.api_key"
+          :feedback="false"
+          toggle-mask
+          aria-describedby="providerApiKeyHelp"
+          placeholder="Не менять ключ"
+        />
+        <p id="providerApiKeyHelp" class="field-help">
+          Ключ внешнего сервиса. При редактировании оставьте поле пустым, если ключ не нужно менять.
+        </p>
       </div>
       <div class="flex justify-end gap-3">
         <Button type="button" label="Отмена" severity="secondary" text @click="dialogVisible = false" />
@@ -283,7 +390,17 @@ watch(activeTenantId, loadProviders)
     <form class="admin-form" @submit.prevent="submitSecret">
       <div class="field">
         <label for="providerSecret">API-ключ</label>
-        <Password id="providerSecret" v-model="secretValue" :feedback="false" toggle-mask autofocus />
+        <Password
+          id="providerSecret"
+          v-model="secretValue"
+          :feedback="false"
+          toggle-mask
+          autofocus
+          aria-describedby="providerSecretHelp"
+        />
+        <p id="providerSecretHelp" class="field-help">
+          Новый ключ полностью заменит текущий сохранённый ключ провайдера.
+        </p>
       </div>
       <div class="flex justify-end gap-3">
         <Button type="button" label="Отмена" severity="secondary" text @click="secretDialogVisible = false" />
@@ -313,7 +430,7 @@ watch(activeTenantId, loadProviders)
       <h5>Поля</h5>
       <dl class="help-list">
         <div>
-          <dt>Код</dt>
+          <dt>Провайдер</dt>
           <dd>Короткое внутреннее имя, например <span class="code-value">openai</span>.</dd>
         </div>
         <div>
@@ -327,6 +444,24 @@ watch(activeTenantId, loadProviders)
         <div>
           <dt>API-ключ</dt>
           <dd>Ключ внешнего сервиса. При редактировании оставьте поле пустым, если ключ менять не нужно.</dd>
+        </div>
+      </dl>
+    </section>
+
+    <section>
+      <h5>Встроенный список</h5>
+      <p>
+        Список провайдеров и моделей сверяется с публичной документацией. Последняя проверка:
+        <span class="code-value">{{ PROVIDER_CATALOG_LAST_REVIEWED }}</span>.
+      </p>
+      <dl class="help-list">
+        <div v-for="provider in PROVIDER_CATALOG" :key="provider.code">
+          <dt>{{ provider.name }}</dt>
+          <dd>
+            <span class="code-value">{{ provider.code }}</span>,
+            <span class="code-value">{{ provider.kind }}</span>,
+            {{ provider.statusText }}.
+          </dd>
         </div>
       </dl>
     </section>

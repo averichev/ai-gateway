@@ -26,6 +26,13 @@ import {
   type ProviderItem,
 } from '../api'
 import { enabledSeverity, formatEnabled } from '../display'
+import {
+  PROVIDER_CATALOG_LAST_REVIEWED,
+  formatModelOptionLabel,
+  matchProviderCatalog,
+  recommendedModelId,
+  type ProviderCatalogItem,
+} from '../providerCatalog'
 
 const { activeTenantId, canWriteActiveTenant } = useAuth()
 const loading = ref(true)
@@ -45,10 +52,55 @@ const form = ref({
   external_model: '',
   is_enabled: true,
 })
-const providerOptions = computed(() => providers.value.map((provider) => ({
-  label: `${provider.code} · ${provider.kind}`,
-  value: provider.code,
-})))
+const providerOptions = computed(() =>
+  providers.value.map((provider) => {
+    const catalogProvider = matchProviderCatalog(provider)
+
+    return {
+      label: catalogProvider
+        ? `${catalogProvider.name} · ${provider.code}`
+        : `${provider.code} · ${provider.kind}`,
+      value: provider.code,
+    }
+  }),
+)
+const selectedProvider = computed(
+  () => providers.value.find((provider) => provider.code === form.value.provider_code) ?? null,
+)
+const selectedProviderCatalog = computed(() => matchProviderCatalog(selectedProvider.value))
+const modelOptions = computed(() => {
+  const catalogProvider = selectedProviderCatalog.value
+
+  if (!catalogProvider) {
+    return []
+  }
+
+  return catalogProvider.models.map((model) => ({
+    label: formatModelOptionLabel(model),
+    value: model.id,
+    name: model.name,
+    note: model.note,
+    deprecated: Boolean(model.deprecated),
+  }))
+})
+const hasModelCatalog = computed(() => modelOptions.value.length > 0)
+const modelCatalogWarning = computed(() => {
+  const catalogProvider = selectedProviderCatalog.value
+
+  if (!selectedProvider.value) {
+    return ''
+  }
+
+  if (!catalogProvider) {
+    return 'Для выбранного провайдера нет встроенного списка моделей. Введите внешнее имя вручную.'
+  }
+
+  if (catalogProvider.status === 'planned') {
+    return `${catalogProvider.name} пока показан справочно: для него нужен отдельный backend adapter.`
+  }
+
+  return ''
+})
 const canSubmit = computed(() => Boolean(form.value.alias.trim() && form.value.provider_code.trim() && form.value.external_model.trim()))
 
 async function loadModelRoutes() {
@@ -77,11 +129,12 @@ async function loadModelRoutes() {
 }
 
 function openCreateDialog() {
+  const providerCode = providers.value[0]?.code ?? ''
   selectedRoute.value = null
   form.value = {
     alias: 'smart-default',
-    provider_code: providers.value[0]?.code ?? '',
-    external_model: '',
+    provider_code: providerCode,
+    external_model: defaultModelForProviderCode(providerCode),
     is_enabled: true,
   }
   dialogVisible.value = true
@@ -96,6 +149,27 @@ function openEditDialog(route: ModelRouteItem) {
     is_enabled: route.is_enabled,
   }
   dialogVisible.value = true
+}
+
+function defaultModelForProviderCode(providerCode: string): string {
+  const catalogProvider = catalogForProviderCode(providerCode)
+
+  if (!catalogProvider || catalogProvider.status !== 'supported') {
+    return ''
+  }
+
+  return recommendedModelId(catalogProvider)
+}
+
+function catalogForProviderCode(providerCode: string): ProviderCatalogItem | undefined {
+  const provider = providers.value.find((item) => item.code === providerCode)
+
+  return matchProviderCatalog(provider)
+}
+
+function syncModelAfterProviderChange() {
+  const nextModel = defaultModelForProviderCode(form.value.provider_code)
+  form.value.external_model = nextModel
 }
 
 async function submitRoute() {
@@ -204,7 +278,16 @@ watch(activeTenantId, loadModelRoutes)
     <form class="admin-form" @submit.prevent="submitRoute">
       <div class="field">
         <label for="routeAlias">Алиас</label>
-        <InputText id="routeAlias" v-model="form.alias" />
+        <InputText
+          id="routeAlias"
+          v-model="form.alias"
+          aria-describedby="routeAliasHelp"
+          placeholder="smart-default"
+        />
+        <p id="routeAliasHelp" class="field-help">
+          Имя, которое используют клиенты в запросе к шлюзу. Его можно оставить стабильным,
+          даже если внешняя модель потом поменяется.
+        </p>
       </div>
       <div class="field">
         <label for="routeProvider">Провайдер</label>
@@ -216,13 +299,49 @@ watch(activeTenantId, loadModelRoutes)
           option-value="value"
           editable
           filter
+          aria-describedby="routeProviderHelp"
           placeholder="Код провайдера"
+          @change="syncModelAfterProviderChange"
         />
+        <p id="routeProviderHelp" class="field-help">
+          Подключение из раздела «Провайдеры», через которое шлюз отправит запрос во внешний AI API.
+        </p>
       </div>
       <div class="field">
         <label for="routeExternalModel">Внешняя модель</label>
-        <InputText id="routeExternalModel" v-model="form.external_model" />
+        <Select
+          id="routeExternalModel"
+          v-model="form.external_model"
+          :options="modelOptions"
+          option-label="label"
+          option-value="value"
+          editable
+          filter
+          aria-describedby="routeExternalModelHelp"
+          :placeholder="hasModelCatalog ? 'Выберите модель' : 'Введите модель вручную'"
+        >
+          <template #option="{ option }">
+            <div class="catalog-option">
+              <div class="catalog-option-main">
+                <span class="code-value">{{ option.value }}</span>
+                <Tag v-if="option.deprecated" value="устаревает" severity="warn" />
+              </div>
+              <small v-if="option.note" class="catalog-option-note">{{ option.note }}</small>
+            </div>
+          </template>
+        </Select>
+        <p id="routeExternalModelHelp" class="field-help">
+          Точное имя модели у выбранного провайдера. Список зависит от провайдера, но поле
+          остаётся редактируемым для новых моделей и совместимых proxy.
+        </p>
       </div>
+      <Message
+        v-if="modelCatalogWarning"
+        severity="warn"
+        :closable="false"
+      >
+        {{ modelCatalogWarning }}
+      </Message>
       <div class="field checkbox-field">
         <Checkbox v-model="form.is_enabled" input-id="routeEnabled" binary />
         <label for="routeEnabled">Включён</label>
@@ -265,7 +384,7 @@ watch(activeTenantId, loadModelRoutes)
         </div>
         <div>
           <dt>Внешняя модель</dt>
-          <dd>Точное имя модели у провайдера, например <span class="code-value">gpt-4o-mini</span> или <span class="code-value">deepseek-chat</span>.</dd>
+          <dd>Точное имя модели у провайдера. Для известных провайдеров поле показывает список, сверенный с публичной документацией на <span class="code-value">{{ PROVIDER_CATALOG_LAST_REVIEWED }}</span>.</dd>
         </div>
         <div>
           <dt>Включён</dt>

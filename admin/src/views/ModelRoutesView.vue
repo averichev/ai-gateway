@@ -4,6 +4,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import Button from 'primevue/button'
 import Checkbox from 'primevue/checkbox'
 import Column from 'primevue/column'
+import ContextMenu from 'primevue/contextmenu'
 import DataTable from 'primevue/datatable'
 import Dialog from 'primevue/dialog'
 import IconField from 'primevue/iconfield'
@@ -13,6 +14,9 @@ import Message from 'primevue/message'
 import Select from 'primevue/select'
 import Tag from 'primevue/tag'
 import Toolbar from 'primevue/toolbar'
+import type { ContextMenuMethods } from 'primevue/contextmenu'
+import type { DataTableRowContextMenuEvent } from 'primevue/datatable'
+import type { MenuItem } from 'primevue/menuitem'
 
 import { useAuth } from '../auth'
 import HelpDrawer from '../components/HelpDrawer.vue'
@@ -46,6 +50,8 @@ const filters = ref({
 const dialogVisible = ref(false)
 const helpVisible = ref(false)
 const selectedRoute = ref<ModelRouteItem | null>(null)
+const contextMenu = ref<ContextMenuMethods | null>(null)
+const contextMenuSelection = ref<ModelRouteItem | null>(null)
 const form = ref({
   alias: 'smart-default',
   provider_code: '',
@@ -102,6 +108,20 @@ const modelCatalogWarning = computed(() => {
   return ''
 })
 const canSubmit = computed(() => Boolean(form.value.alias.trim() && form.value.provider_code.trim() && form.value.external_model.trim()))
+const routeContextMenuItems = computed<MenuItem[]>(() => [
+  {
+    label: 'Изменить',
+    icon: 'pi pi-pencil',
+    disabled: !canWriteActiveTenant.value || !contextMenuSelection.value,
+    command: () => {
+      if (!canWriteActiveTenant.value || !contextMenuSelection.value) {
+        return
+      }
+
+      openEditDialog(contextMenuSelection.value)
+    },
+  },
+])
 
 async function loadModelRoutes() {
   loading.value = true
@@ -149,6 +169,15 @@ function openEditDialog(route: ModelRouteItem) {
     is_enabled: route.is_enabled,
   }
   dialogVisible.value = true
+}
+
+function openContextMenu(event: Event, route: ModelRouteItem) {
+  contextMenuSelection.value = route
+  contextMenu.value?.show(event)
+}
+
+function onRowContextMenu(event: DataTableRowContextMenuEvent) {
+  openContextMenu(event.originalEvent, event.data as ModelRouteItem)
 }
 
 function defaultModelForProviderCode(providerCode: string): string {
@@ -227,9 +256,11 @@ watch(activeTenantId, loadModelRoutes)
 
         <DataTable
           v-model:filters="filters"
+          v-model:contextMenuSelection="contextMenuSelection"
           :value="items"
           :loading="loading"
           data-key="id"
+          context-menu
           paginator
           :rows="10"
           :rows-per-page-options="[10, 25, 50]"
@@ -237,7 +268,9 @@ watch(activeTenantId, loadModelRoutes)
           current-page-report-template="{first}-{last} из {totalRecords}"
           :global-filter-fields="['alias', 'provider_code', 'external_model']"
           responsive-layout="scroll"
+          row-hover
           striped-rows
+          @row-contextmenu="onRowContextMenu"
         >
           <template #header>
             <div class="table-header">
@@ -264,12 +297,16 @@ watch(activeTenantId, loadModelRoutes)
               {{ formatDateTime(data.updated_at) }}
             </template>
           </Column>
-          <Column :exportable="false" style="min-width: 5rem">
+          <Column :exportable="false" style="min-width: 8rem">
             <template #body="{ data }">
-              <Button icon="pi pi-pencil" rounded outlined severity="secondary" aria-label="Изменить" :disabled="!canWriteActiveTenant" @click="openEditDialog(data)" />
+              <div class="flex gap-2">
+                <Button icon="pi pi-pencil" rounded outlined severity="secondary" aria-label="Изменить" :disabled="!canWriteActiveTenant" @click="openEditDialog(data)" />
+                <Button icon="pi pi-ellipsis-v" rounded outlined severity="secondary" aria-label="Действия" @click="openContextMenu($event, data)" />
+              </div>
             </template>
           </Column>
         </DataTable>
+        <ContextMenu ref="contextMenu" :model="routeContextMenuItems" />
       </div>
     </div>
   </div>

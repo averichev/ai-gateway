@@ -18,7 +18,7 @@ import {
   type GenerateResponse,
   type ModelRouteItem,
 } from '../api'
-import { formatFinishReason } from '../display'
+import { finishReasonSeverity, formatFinishReason } from '../display'
 
 const { activeTenantId } = useAuth()
 const routesLoading = ref(true)
@@ -33,6 +33,7 @@ const sending = ref(false)
 const errorMessage = ref('')
 const response = ref<GenerateResponse | null>(null)
 const latencyMs = ref<number | null>(null)
+const responseTokenLimit = ref<number | null>(null)
 
 const enabledRoutes = computed(() => routes.value.filter((route) => route.is_enabled))
 const modelOptions = computed(() => enabledRoutes.value.map((route) => ({
@@ -40,6 +41,7 @@ const modelOptions = computed(() => enabledRoutes.value.map((route) => ({
   value: route.alias,
 })))
 const canSubmit = computed(() => Boolean(model.value.trim() && userPrompt.value.trim() && !sending.value))
+const isResponseTruncated = computed(() => response.value?.finish_reason === 'length')
 
 async function loadRoutes() {
   routesLoading.value = true
@@ -71,6 +73,7 @@ async function sendRequest() {
   errorMessage.value = ''
   response.value = null
   latencyMs.value = null
+  responseTokenLimit.value = null
 
   const messages: GenerateMessage[] = []
   const systemContent = systemPrompt.value.trim()
@@ -90,6 +93,7 @@ async function sendRequest() {
   if (typeof maxTokens.value === 'number') {
     options.max_tokens = Math.trunc(maxTokens.value)
   }
+  responseTokenLimit.value = options.max_tokens ?? null
 
   const startedAt = performance.now()
 
@@ -115,6 +119,7 @@ function clearResponse() {
   response.value = null
   errorMessage.value = ''
   latencyMs.value = null
+  responseTokenLimit.value = null
 }
 
 onMounted(loadRoutes)
@@ -182,8 +187,11 @@ watch(activeTenantId, loadRoutes)
 
               <div class="col-span-12 md:col-span-6">
                 <div class="field">
-                  <label for="maxTokens">Максимум токенов</label>
+                  <label for="maxTokens">Максимум токенов ответа</label>
                   <InputNumber id="maxTokens" v-model="maxTokens" :min="1" :step="1" show-buttons />
+                  <p class="field-help">
+                    Это лимит длины ответа провайдера. Если он мал, ответ будет обрезан.
+                  </p>
                 </div>
               </div>
             </div>
@@ -206,7 +214,10 @@ watch(activeTenantId, loadRoutes)
 
             <div v-if="response" class="response-meta">
               <Tag :value="response.provider" severity="info" />
-              <Tag :value="formatFinishReason(response.finish_reason)" severity="success" />
+              <Tag
+                :value="formatFinishReason(response.finish_reason)"
+                :severity="finishReasonSeverity(response.finish_reason)"
+              />
             </div>
           </div>
 
@@ -219,6 +230,16 @@ watch(activeTenantId, loadRoutes)
           </div>
 
           <template v-else-if="response">
+            <Message
+              v-if="isResponseTruncated"
+              severity="warn"
+              :closable="false"
+              class="mb-4"
+            >
+              Ответ остановлен по лимиту токенов ответа. Увеличьте «Максимум токенов ответа»,
+              если нужен полный текст.
+            </Message>
+
             <pre class="preview-surface">{{ response.output_text }}</pre>
 
             <dl class="summary-grid mt-4">
@@ -235,8 +256,16 @@ watch(activeTenantId, loadRoutes)
                 <dd>{{ latencyMs ?? '-' }} ms</dd>
               </div>
               <div class="summary-item">
-                <dt>Токены</dt>
-                <dd>{{ response.usage?.input_tokens ?? '-' }} / {{ response.usage?.output_tokens ?? '-' }}</dd>
+                <dt>Токены входа</dt>
+                <dd>{{ response.usage?.input_tokens ?? '-' }}</dd>
+              </div>
+              <div class="summary-item">
+                <dt>Токены ответа</dt>
+                <dd>{{ response.usage?.output_tokens ?? '-' }}</dd>
+              </div>
+              <div class="summary-item">
+                <dt>Лимит ответа</dt>
+                <dd>{{ responseTokenLimit ?? '-' }}</dd>
               </div>
             </dl>
           </template>

@@ -77,3 +77,18 @@ export function formatFinishReason(reason: string): string {
       return reason
   }
 }
+
+export function finishReasonSeverity(reason: string): 'success' | 'info' | 'warn' | 'danger' | 'secondary' {
+  switch (reason) {
+    case 'stop':
+      return 'success'
+    case 'length':
+      return 'warn'
+    case 'content_filter':
+      return 'danger'
+    case 'tool_calls':
+      return 'info'
+    default:
+      return 'secondary'
+  }
+}

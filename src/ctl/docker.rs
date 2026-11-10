@@ -5,7 +5,7 @@ use std::{
 
 use crate::ctl::{CtlError, Result, config::CtlConfig, linux::LinuxPlatform};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct DockerClient;
 
 impl DockerClient {

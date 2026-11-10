@@ -5,7 +5,9 @@ use std::{collections::HashMap, sync::Arc};
 use async_trait::async_trait;
 use thiserror::Error;
 
-use crate::domain::{GenerateRequestDto, ProviderGenerateResult, ResolvedRouteRecord};
+use crate::domain::{
+    GenerateRequestDto, ProviderGenerateResult, ResolvedRouteRecord, TokenUsageDto,
+};
 
 pub use openai_compatible::OpenAiCompatibleProvider;
 
@@ -50,8 +52,13 @@ pub enum ProviderError {
         status: Option<u16>,
         message: String,
     },
-    #[error("invalid provider response: {0}")]
-    InvalidResponse(String),
+    #[error("invalid provider response: {message}")]
+    InvalidResponse {
+        message: String,
+        usage: Option<TokenUsageDto>,
+    },
+    #[error("model does not support the requested tool calling capability")]
+    ToolCallingNotSupported,
     #[error("missing encrypted provider secret for `{0}`")]
     MissingProviderSecret(String),
     #[error("provider secret cannot be decrypted for `{0}`")]
@@ -67,7 +74,8 @@ impl ProviderError {
         match self {
             Self::Timeout(_) => "provider_timeout",
             Self::Upstream { .. } => "provider_error",
-            Self::InvalidResponse(_) => "provider_invalid_response",
+            Self::InvalidResponse { .. } => "provider_invalid_response",
+            Self::ToolCallingNotSupported => "tool_calling_not_supported",
             Self::MissingProviderSecret(_)
             | Self::ProviderSecretUnavailable(_)
             | Self::UnsupportedKind(_) => "gateway_misconfigured",
@@ -76,22 +84,17 @@ impl ProviderError {
     }
 
     pub fn client_code(&self) -> &'static str {
-        match self {
-            Self::Timeout(_) => "provider_timeout",
-            Self::Upstream { .. } => "provider_error",
-            Self::InvalidResponse(_) => "provider_invalid_response",
-            Self::MissingProviderSecret(_)
-            | Self::ProviderSecretUnavailable(_)
-            | Self::UnsupportedKind(_) => "gateway_misconfigured",
-            Self::Transport(_) => "provider_transport_error",
-        }
+        self.status_label()
     }
 
     pub fn client_message(&self) -> String {
         match self {
             Self::Timeout(_) => "Провайдер не ответил вовремя".to_owned(),
             Self::Upstream { message, .. } => format!("Провайдер вернул ошибку: {message}"),
-            Self::InvalidResponse(_) => "Провайдер вернул некорректный ответ".to_owned(),
+            Self::InvalidResponse { .. } => "Провайдер вернул некорректный ответ".to_owned(),
+            Self::ToolCallingNotSupported => {
+                "Выбранная модель или провайдер не поддерживает запрошенный Tool Calling".to_owned()
+            }
             Self::MissingProviderSecret(provider_code) => {
                 format!("Gateway не настроен: отсутствует provider secret для `{provider_code}`")
             }
@@ -105,17 +108,14 @@ impl ProviderError {
         }
     }
 
-    fn status(&self) -> String {
-        match self.status_label() {
-            "provider_timeout" => "provider_timeout".to_owned(),
-            "provider_error" => "provider_error".to_owned(),
-            "provider_invalid_response" => "provider_invalid_response".to_owned(),
-            "gateway_misconfigured" => "gateway_misconfigured".to_owned(),
-            _ => "provider_transport_error".to_owned(),
+    pub fn usage(&self) -> Option<&TokenUsageDto> {
+        match self {
+            Self::InvalidResponse { usage, .. } => usage.as_ref(),
+            _ => None,
         }
     }
 
     pub fn storage_status(&self) -> String {
-        self.status()
+        self.status_label().to_owned()
     }
 }

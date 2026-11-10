@@ -2,11 +2,11 @@
 
 ## Назначение
 
-`ai-gateway` в текущей версии — это тонкий внутренний HTTP-сервис, который даёт приложениям одну точку входа для text generation. Клиенты знают только внутренний alias модели и единый endpoint, а gateway сам:
+`ai-gateway` — тонкий внутренний HTTP-сервис для генерации текста и структурированного Tool Calling. Клиенты знают только внутренний alias модели и единый endpoint, а gateway сам:
 
 - резолвит alias в реальный provider и внешнюю модель;
 - вызывает внешний AI API через provider adapter;
-- нормализует ответ в свой внутренний контракт;
+- нормализует текст, tool calls, finish reason и usage в свой внутренний контракт;
 - сохраняет историю запроса в PostgreSQL.
 
 Главный принцип MVP: минимальная архитектура без универсального AI-runtime.
@@ -16,10 +16,10 @@
 ### HTTP/API
 
 - `POST /api/v1/generate`
-- `GET /api/admin/requests`
-- `GET /api/admin/requests/:id`
-- `GET /api/admin/providers`
-- `GET /api/admin/model-routes`
+- `GET /api/admin/tenants/:tenant_id/requests`
+- `GET /api/admin/tenants/:tenant_id/requests/:id`
+- `GET /api/admin/tenants/:tenant_id/providers`
+- `GET /api/admin/tenants/:tenant_id/model-routes`
 - `GET /health`
 
 HTTP-слой отвечает только за transport, сериализацию JSON и преобразование ошибок в HTTP responses.
@@ -38,6 +38,8 @@ Use case делает только практические шаги:
 6. сохраняет запись в `requests`;
 7. возвращает нормализованный ответ клиенту.
 
+Запросы с инструментами дополнительно проходят проверку имён, структуры JSON Schema, политики выбора, размера и связности истории вызовов / результатов. Это проверка входного контракта, без выполнения инструментов или управления агентом.
+
 ### Provider adapters
 
 Внешние LLM API скрыты за `ProviderAdapter`.
@@ -51,7 +53,11 @@ Use case делает только практические шаги:
 - работать через настраиваемый `base_url`;
 - отправлять `chat/completions`;
 - забирать usage и finish reason;
-- нормализовать ошибки upstream.
+- нормализовать ошибки upstream;
+- преобразовывать definitions, политику выбора, assistant tool calls и tool results;
+- принимать ответы только с tool calls и проверять JSON-аргументы по объявленной схеме.
+
+Все OpenAI-specific envelopes и строковая сериализация аргументов остаются внутри adapter. Общий контракт вызова — `{id, name, arguments}`. `finish_reason` типизирован: `stop`, `length`, `tool_calls`, `content_filter`, `unknown`. Для старых клиентов `output_text` всегда строка, включая `""` при вызовах без текста.
 
 ### Storage / repository
 
@@ -64,13 +70,13 @@ Repository-слой не знает про HTTP и не содержит лог�
 
 ### Конфигурация маршрутов
 
-В MVP маршруты и providers хранятся в PostgreSQL, а секреты — в env.
+Маршруты и providers хранятся в PostgreSQL с tenant scope. Существующий механизм `provider_secrets` хранит ключи encrypted-at-rest; master key приходит из `GATEWAY_MASTER_KEY` в env.
 
 Это даёт удобный компромисс:
 
-- alias и маршруты можно читать через admin API;
-- UI позже сможет редактировать эти сущности;
-- секреты не попадают в таблицы.
+- alias и маршруты можно читать и сохранять через admin API;
+- machine token определяет tenant, внутри которого разрешаются routes и secrets;
+- plaintext provider keys не возвращаются из read API и не сохраняются в истории запросов.
 
 ## Поток запроса
 
@@ -85,6 +91,25 @@ providerAdapter --> upstream[ExternalLLMApi]
 generateUseCase --> requestsRepo[PostgresRequestsRepository]
 generateApi --> client
 ```
+
+## Граница Tool Calling и Factum
+
+```text
+Factum -> POST /api/v1/generate (messages + tool definitions)
+Gateway -> ProviderAdapter -> LLM
+LLM -> ProviderAdapter -> Gateway -> Factum (tool_calls + usage)
+Factum выполняет инструменты
+Factum -> POST /api/v1/generate (assistant calls + tool results)
+Gateway -> ProviderAdapter -> LLM -> Factum (final answer)
+```
+
+Каждый запрос — один completion; существующий технический retry параметра token limit остаётся внутри adapter. Gateway не запускает agent loop, не подключается к MCP, не выбирает бизнес-инструменты и не управляет историей Factum. Клиент передаёт нужную историю каждый раз. [Полный JSON-пример](docs/rest-api.md#полный-цикл-tool-calling).
+
+Поддержка tools зависит от upstream-модели, явный отказ даёт `400 tool_calling_not_supported`. Статического списка моделей нет. Маршрутизация по alias, machine auth и tenant-local secrets остаются в существующих слоях.
+
+Лимиты: 2 MiB request, 256 сообщений, 128 definitions / вызовов в сообщении, 64 KiB на схему / аргументы; upstream response ограничен 4 MiB. JSON Schema проверяется библиотекой `jsonschema`, сетевое и файловое разрешение ссылок отключено. Вызовы с некорректными аргументами отклоняются, частичный успех не возвращается.
+
+В истории запросов сохраняются usage, latency, status и routing, включая ошибки разбора вызовов с доступным usage. Prompt/response preview в сценариях tools отключаются, сырые upstream errors не попадают в БД или HTTP errors. Логи ошибок записываются до возврата HTTP error. Runtime-инструменты, полная история и аргументы не добавляются в storage schema.
 
 ## Почему `axum`
 
@@ -136,11 +161,10 @@ ORM не добавлялся сознательно, чтобы не услож
 - streaming;
 - SSE/WebSocket;
 - embeddings;
-- tools / function calling;
+- выполнение tools и agent orchestration;
 - file upload;
 - image generation;
 - fallback orchestration;
-- auth/roles;
 - quotas/billing;
 - UI-редактирование providers и routes;
 - детальная event-история в отдельной таблице.
@@ -153,7 +177,7 @@ ORM не добавлялся сознательно, чтобы не услож
 4. Добавить запись в таблицу `providers` с новым `kind`.
 5. Привязать alias к этому provider через `model_routes`.
 
-Текущий контракт adapter намеренно узкий: один text generation call без streaming.
+Текущий контракт adapter намеренно узкий: один generation call с текстом и/или структурированными tool calls, без streaming и исполнения инструментов.
 
 ## Как добавить новый alias модели
 

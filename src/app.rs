@@ -2,6 +2,7 @@ use std::{path::Path, sync::Arc};
 
 use axum::{
     Json, Router,
+    extract::DefaultBodyLimit,
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, get_service, post},
@@ -49,14 +50,21 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/auth/register", post(auth::bootstrap_register))
         .route("/api/auth/login", post(auth::login))
         .route("/api/auth/me", get(auth::me))
-        .route("/api/v1/generate", post(generate::handle_generate))
+        .route(
+            "/api/v1/generate",
+            post(generate::handle_generate).layer(DefaultBodyLimit::max(
+                crate::domain::validation::MAX_GENERATE_BODY_BYTES,
+            )),
+        )
         .route("/api/admin/tenants", get(admin::list_tenants))
         .route("/api/admin/tenants", post(admin::create_tenant))
         .route("/api/admin/users", get(admin::list_users))
         .route("/api/admin/users", post(admin::create_user))
         .route(
             "/api/admin/tenants/{tenant_id}/generate",
-            post(admin::handle_generate),
+            post(admin::handle_generate).layer(DefaultBodyLimit::max(
+                crate::domain::validation::MAX_GENERATE_BODY_BYTES,
+            )),
         )
         .route(
             "/api/admin/tenants/{tenant_id}/requests",

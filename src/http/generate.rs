@@ -1,4 +1,8 @@
-use axum::{Json, extract::State, http::HeaderMap};
+use axum::{
+    Json,
+    extract::{State, rejection::JsonRejection},
+    http::HeaderMap,
+};
 
 use crate::{
     app::{AppHttpError, AppState},
@@ -13,7 +17,9 @@ const GENERATE_DESCRIPTION: &str = r#"Основной клиентский endp
 
 Контракт специально остается provider-agnostic: OpenAI-compatible, Anthropic-native и другие внешние форматы должны жить внутри отдельных `ProviderAdapter`, а не в этом request/response.
 
-При любом исходе gateway пытается записать запрос в историю. В успешном ответе возвращается нормализованный текст, provider code и usage, если upstream его сообщил."#;
+При любом исходе gateway пытается записать запрос в историю. В успешном ответе возвращаются `output_text` (строка, в том числе пустая), структурированные `tool_calls`, нормализованный `finish_reason` и usage. Gateway не выполняет инструменты: клиент отправляет следующий запрос с assistant tool_calls и tool results. Примеры полного цикла: docs/rest-api.md.
+
+Лимиты: 2 MiB JSON, 256 сообщений, 128 инструментов / вызовов за completion, 64 KiB на JSON Schema / аргументы. Имена инструментов: [a-zA-Z0-9_-], 1..64 символа. Аргументы — JSON objects. JSON Schema проверяется без доступа к сети и файлам. Preview для запросов с инструментами не сохраняется."#;
 
 #[utoipa::path(
     post,
@@ -24,40 +30,53 @@ const GENERATE_DESCRIPTION: &str = r#"Основной клиентский endp
     description = GENERATE_DESCRIPTION,
     request_body(
         content = GenerateRequestDto,
-        description = "Внутренний generation request. `model` - alias из `model_routes`; `messages` - непустой список сообщений; `options` - необязательные параметры генерации.",
+        description = "Внутренний generation request. `model` — alias; `messages` — system/user/assistant/tool; `tools` и `tool_choice` необязательны. tool_choice: auto, none, required или {name: tool_name}.",
         content_type = "application/json",
-        example = json!({
-            "model": "smart-default",
-            "messages": [
-                { "role": "system", "content": "Ты помогаешь CMS." },
-                { "role": "user", "content": "Коротко опиши структуру меню." }
-            ],
-            "options": {
-                "temperature": 0.2,
-                "max_tokens": 1000
-            }
-        })
+        examples(
+            ("Text" = (value = json!({
+                "model": "smart-default",
+                "messages": [{"role":"user","content":"Привет"}]
+            }))),
+            ("ToolDefinition" = (summary = "1. Объявить инструмент", value = json!({
+                "model":"smart-default",
+                "messages":[{"role":"user","content":"Какая погода в Москве?"}],
+                "tools":[{"name":"weather","description":"Текущая погода","parameters":{
+                    "type":"object","properties":{"city":{"type":"string"}},"required":["city"]
+                }}],
+                "tool_choice":"auto"
+            }))),
+            ("ToolResult" = (summary = "3. Передать результат исполнения из Factum", value = json!({
+                "model":"smart-default",
+                "messages":[
+                    {"role":"user","content":"Какая погода в Москве?"},
+                    {"role":"assistant","tool_calls":[{"id":"call_weather_1","name":"weather","arguments":{"city":"Москва"}}]},
+                    {"role":"tool","tool_call_id":"call_weather_1","content":"+12 °C, солнечно"}
+                ],
+                "tool_choice":"none"
+            })))
+        )
     ),
     responses(
         (
             status = 200,
-            description = "Генерация выполнена. Ответ содержит request id, исходный alias модели, выбранный provider code, текст и usage при наличии.",
+            description = "Генерация выполнена: текст и/или tool_calls. При ответе только с вызовами output_text равен пустой строке, finish_reason — tool_calls. Пустой список tool_calls опускается.",
             body = GenerateResponseDto,
-            example = json!({
-                "id": "req_4d4d6f4df77f4c1e8260f60f052f63cc",
-                "model": "smart-default",
-                "provider": "openai",
-                "output_text": "Структура меню такая: ...",
-                "finish_reason": "stop",
-                "usage": {
-                    "input_tokens": 120,
-                    "output_tokens": 80
-                }
-            })
+            examples(
+                ("ToolCall" = (summary = "2. Запрос модели на вызов инструмента", value = json!({
+                    "id":"req_first","model":"smart-default","provider":"openai","output_text":"",
+                    "tool_calls":[{"id":"call_weather_1","name":"weather","arguments":{"city":"Москва"}}],
+                    "finish_reason":"tool_calls","usage":{"input_tokens":80,"output_tokens":20}
+                }))),
+                ("FinalAnswer" = (summary = "4. Обычный текст после Tool Calling", value = json!({
+                    "id":"req_second","model":"smart-default","provider":"openai",
+                    "output_text":"В Москве солнечно, +12 °C.","finish_reason":"stop",
+                    "usage":{"input_tokens":120,"output_tokens":15}
+                })))
+            )
         ),
         (
             status = 400,
-            description = "Внутренняя бизнес-валидация не пройдена: пустой `model` или пустой `messages`.",
+            description = "invalid_request: неверный JSON, схема, имя, tool_choice или история вызовов. tool_calling_not_supported: upstream явно отклонил поддержку tools / tool_choice для выбранной модели.",
             body = crate::domain::ErrorResponseDto,
             example = json!({
                 "request_id": "req_4d4d6f4df77f4c1e8260f60f052f63cc",
@@ -66,6 +85,16 @@ const GENERATE_DESCRIPTION: &str = r#"Основной клиентский endp
                     "message": "Поля `model` и `messages` обязательны"
                 }
             })
+        ),
+        (
+            status = 401,
+            description = "Отсутствующий или неизвестный gateway machine token.",
+            body = crate::domain::ErrorResponseDto,
+        ),
+        (
+            status = 413,
+            description = "Тело запроса превышает 2 MiB.",
+            body = crate::domain::ErrorResponseDto,
         ),
         (
             status = 404,
@@ -99,7 +128,7 @@ const GENERATE_DESCRIPTION: &str = r#"Основной клиентский endp
                 "request_id": "req_4d4d6f4df77f4c1e8260f60f052f63cc",
                 "error": {
                     "code": "provider_error",
-                    "message": "Провайдер вернул ошибку: invalid model"
+                    "message": "Провайдер вернул ошибку: HTTP 400 from upstream"
                 }
             })
         ),
@@ -120,8 +149,9 @@ const GENERATE_DESCRIPTION: &str = r#"Основной клиентский endp
 pub async fn handle_generate(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(payload): Json<GenerateRequestDto>,
+    payload: Result<Json<GenerateRequestDto>, JsonRejection>,
 ) -> Result<Json<GenerateResponseDto>, AppHttpError> {
+    let Json(payload) = payload.map_err(generation_json_error)?;
     let token = bearer_token(&headers)?;
     let client = state
         .auth_repo
@@ -139,4 +169,20 @@ pub async fn handle_generate(
         .await?;
 
     Ok(Json(response))
+}
+
+pub fn generation_json_error(error: JsonRejection) -> AppHttpError {
+    let status = if error.status() == axum::http::StatusCode::PAYLOAD_TOO_LARGE {
+        axum::http::StatusCode::PAYLOAD_TOO_LARGE
+    } else {
+        axum::http::StatusCode::BAD_REQUEST
+    };
+    // Deserialize errors can include argument values; never expose them.
+    AppHttpError::new(
+        status,
+        AppHttpError::body(
+            "invalid_request",
+            "Некорректный JSON запроса или превышен лимит 2 MiB",
+        ),
+    )
 }

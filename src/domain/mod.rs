@@ -3,7 +3,9 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use utoipa::ToSchema;
 
-/// Internal text generation request accepted by AI Gateway clients.
+pub mod validation;
+
+/// Internal generation request accepted by AI Gateway clients.
 ///
 /// This is the stable gateway contract. It is intentionally not an OpenAI,
 /// Anthropic, or Gemini request DTO; provider-specific payloads are created by
@@ -29,15 +31,22 @@ pub struct GenerateRequestDto {
     pub model: String,
     /// Ordered conversation messages to send to the resolved provider.
     ///
-    /// The list must not be empty. Supported roles are `system`, `user`, and
-    /// `assistant`.
-    #[schema(min_items = 1)]
+    /// The list must not be empty. Tool execution and conversation state belong
+    /// to the client; the gateway forwards one completion at a time.
+    #[schema(min_items = 1, max_items = 256)]
     pub messages: Vec<GenerateMessageDto>,
     /// Optional generation controls.
     ///
     /// Omitted fields are not sent to the provider adapter.
     #[serde(default)]
     pub options: GenerateOptionsDto,
+    /// Available tools. Omitted for ordinary text generation; at most 128.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schema(max_items = 128)]
+    pub tools: Vec<ToolDefinitionDto>,
+    /// Optional tool selection policy, or a specific tool by name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<ToolChoiceDto>,
 }
 
 /// Admin smoke-test request.
@@ -61,15 +70,76 @@ pub struct AdminGenerateRequestDto {
     pub request: GenerateRequestDto,
 }
 
-/// One message in the generation conversation.
+/// One message in the conversation. Ordinary text messages keep their shape.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct GenerateMessageDto {
-    /// Message role in the internal gateway contract.
-    #[schema(example = "user")]
-    pub role: MessageRole,
-    /// Plain text message content.
-    #[schema(example = "Коротко опиши структуру меню.")]
-    pub content: String,
+#[serde(tag = "role", rename_all = "lowercase", deny_unknown_fields)]
+pub enum GenerateMessageDto {
+    System {
+        content: String,
+    },
+    User {
+        content: String,
+    },
+    Assistant {
+        /// May be null or omitted when tool_calls is nonempty.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        content: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[schema(max_items = 128)]
+        tool_calls: Vec<ToolCallDto>,
+    },
+    Tool {
+        tool_call_id: String,
+        /// Tool result serialized as text by the client (JSON text is allowed).
+        content: String,
+    },
+}
+
+/// A tool definition, without a vendor-specific function envelope.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ToolDefinitionDto {
+    /// ASCII letters, digits, underscore or hyphen; 1..64 characters.
+    #[schema(min_length = 1, max_length = 64, pattern = "^[a-zA-Z0-9_-]+$")]
+    pub name: String,
+    pub description: String,
+    /// JSON Schema with root type object. Remote/file references are disabled.
+    #[schema(value_type = Object)]
+    pub parameters: serde_json::Map<String, serde_json::Value>,
+}
+
+/// A normalized tool invocation. Arguments are a JSON object, not JSON text.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ToolCallDto {
+    /// Unique invocation identifier, preserved through tool results.
+    #[schema(min_length = 1, max_length = 256, pattern = "^[!-~]+$")]
+    pub id: String,
+    #[schema(min_length = 1, max_length = 64, pattern = "^[a-zA-Z0-9_-]+$")]
+    pub name: String,
+    #[schema(value_type = Object)]
+    pub arguments: serde_json::Map<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(untagged)]
+pub enum ToolChoiceDto {
+    Policy(ToolChoicePolicy),
+    Named(NamedToolChoiceDto),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct NamedToolChoiceDto {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolChoicePolicy {
+    Auto,
+    None,
+    Required,
 }
 
 /// Optional model generation parameters.
@@ -87,29 +157,6 @@ pub struct GenerateOptionsDto {
     #[schema(example = 1000)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<i32>,
-}
-
-/// Supported message roles in the internal gateway contract.
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-#[schema(example = "user")]
-#[serde(rename_all = "lowercase")]
-pub enum MessageRole {
-    /// System-level instruction.
-    System,
-    /// User message.
-    User,
-    /// Assistant message, usually used when passing prior conversation history.
-    Assistant,
-}
-
-impl MessageRole {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::System => "system",
-            Self::User => "user",
-            Self::Assistant => "assistant",
-        }
-    }
 }
 
 /// Normalized generation response returned by the gateway.
@@ -137,15 +184,29 @@ pub struct GenerateResponseDto {
     /// Provider code selected by model routing.
     #[schema(example = "openai")]
     pub provider: String,
-    /// Generated text returned by the provider adapter.
+    /// Generated text; an empty string when only tool calls are returned.
     #[schema(example = "Структура меню такая: ...")]
     pub output_text: String,
+    /// Structured tool invocations. The client executes them outside gateway.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[schema(required = false, max_items = 128)]
+    pub tool_calls: Vec<ToolCallDto>,
     /// Normalized finish reason from the provider adapter.
     #[schema(example = "stop")]
-    pub finish_reason: String,
+    pub finish_reason: FinishReason,
     /// Token usage reported by the provider, when available.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage: Option<TokenUsageDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FinishReason {
+    Stop,
+    Length,
+    ToolCalls,
+    ContentFilter,
+    Unknown,
 }
 
 /// Normalized token usage.
@@ -185,7 +246,7 @@ pub struct ErrorBodyDto {
     ///
     /// Known values include `invalid_request`, `route_not_found`,
     /// `provider_timeout`, `provider_error`, `provider_invalid_response`,
-    /// `provider_transport_error`, `gateway_misconfigured`, `storage_error`,
+    /// `provider_transport_error`, `tool_calling_not_supported`, `gateway_misconfigured`, `storage_error`,
     /// and `not_found`.
     #[schema(example = "provider_timeout")]
     pub code: String,
@@ -277,7 +338,8 @@ pub struct RequestLogInsert {
 #[derive(Debug, Clone)]
 pub struct ProviderGenerateResult {
     pub output_text: String,
-    pub finish_reason: String,
+    pub tool_calls: Vec<ToolCallDto>,
+    pub finish_reason: FinishReason,
     pub usage: Option<TokenUsageDto>,
 }
 
@@ -524,7 +586,7 @@ pub struct RequestListItemDto {
     ///
     /// Typical values: `success`, `invalid_request`, `route_not_found`,
     /// `provider_timeout`, `provider_error`, `provider_invalid_response`,
-    /// `provider_transport_error`, `gateway_misconfigured`, `storage_error`.
+    /// `provider_transport_error`, `tool_calling_not_supported`, `gateway_misconfigured`, `storage_error`.
     #[schema(example = "success")]
     pub status: String,
     /// End-to-end request latency in milliseconds, when available.

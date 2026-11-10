@@ -17,7 +17,7 @@
 
 ### Назначение
 
-Выполнить text generation через внутренний alias модели.
+Выполнить генерацию текста и/или структурированных вызовов инструментов через внутренний alias модели.
 
 Tenant определяется по machine token. Alias ищется только внутри этого tenant.
 
@@ -41,8 +41,12 @@ Tenant определяется по machine token. Alias ищется толь�
 
 - `model` — внутренний alias маршрута.
 - `messages` — список сообщений.
-- `messages[].role` — `system`, `user`, `assistant`.
-- `messages[].content` — текст сообщения.
+- `messages[].role` — `system`, `user`, `assistant`, `tool`.
+- `messages[].content` — строка; у assistant может отсутствовать или быть `null`, если есть `tool_calls`.
+- `messages[].tool_calls` — только у assistant: массив `{id, name, arguments}`.
+- `messages[].tool_call_id` — обязательный идентификатор вызова для сообщения `tool`; `content` содержит результат строкой, включая JSON, сериализованный клиентом.
+- `tools` — необязательный массив `{name, description, parameters}`. `parameters` — JSON Schema с корневым `"type": "object"`, без OpenAI-обёртки `function`.
+- `tool_choice` — необязательное `"auto"`, `"none"`, `"required"` или `{"name": "weather"}`. Именованный выбор должен ссылаться на объявленный инструмент; `auto`/`required` требуют непустого `tools`. При отсутствии поля используется поведение провайдера.
 - `options.temperature` — optional.
 - `options.max_tokens` — optional.
 
@@ -61,6 +65,91 @@ Tenant определяется по machine token. Alias ищется толь�
   }
 }
 ```
+
+`output_text` всегда остаётся строкой. При ответе только с инструментами это `""`, а `tool_calls` содержит структурированные вызовы. Для текстовых ответов пустой `tool_calls` опускается: старый формат ответа сохраняется.
+
+Нормализованные `finish_reason`: `stop`, `length`, `tool_calls`, `content_filter`, `unknown`. Отсутствующий reason определяется по наличию вызовов; неизвестное значение становится `unknown`. Неполный completion с вызовами (`length`/`content_filter`) отклоняется, чтобы клиент не исполнил обрезанный вызов.
+
+### Полный цикл Tool Calling
+
+Все запросы идут в `POST /api/v1/generate` с тем же machine token. Gateway делает один completion за запрос. Историей, выбором бизнес-инструментов, их исполнением и следующими запросами управляет Factum.
+
+1. **Tool Definition** — приложение объявляет доступный инструмент:
+
+```json
+{
+  "model": "smart-default",
+  "messages": [{"role": "user", "content": "Какая погода в Москве?"}],
+  "tools": [{
+    "name": "weather",
+    "description": "Получить текущую погоду по названию города",
+    "parameters": {
+      "type": "object",
+      "properties": {"city": {"type": "string"}},
+      "required": ["city"],
+      "additionalProperties": false
+    }
+  }],
+  "tool_choice": "auto"
+}
+```
+
+2. **LLM Tool Call** — gateway возвращает ответ модели без выполнения инструмента:
+
+```json
+{
+  "id": "req_first",
+  "model": "smart-default",
+  "provider": "openai",
+  "output_text": "",
+  "tool_calls": [{"id": "call_weather_1", "name": "weather", "arguments": {"city": "Москва"}}],
+  "finish_reason": "tool_calls",
+  "usage": {"input_tokens": 80, "output_tokens": 20}
+}
+```
+
+`arguments` — JSON object, а не строка с JSON. Vendor-specific строковая сериализация аргументов выполняется только внутри adapter. Числа сохраняются без промежуточного преобразования в `f64`.
+
+3. **Tool Result** — Factum исполняет вызов и отправляет полную историю с теми же идентификатором и аргументами. В этом примере новые вызовы запрещены через `none`, поэтому повторять definitions не требуется:
+
+```json
+{
+  "model": "smart-default",
+  "messages": [
+    {"role": "user", "content": "Какая погода в Москве?"},
+    {"role": "assistant", "tool_calls": [
+      {"id": "call_weather_1", "name": "weather", "arguments": {"city": "Москва"}}
+    ]},
+    {"role": "tool", "tool_call_id": "call_weather_1", "content": "{\"temperature_c\": 12, \"condition\": \"солнечно\"}"}
+  ],
+  "tool_choice": "none"
+}
+```
+
+Если нужно разрешить следующие вызовы, приложение снова передаёт `tools` и подходящий `tool_choice`. Assistant может возвращать несколько вызовов; нужны результаты каждого вызова перед следующим сообщением другой роли. Порядок результатов может отличаться от порядка вызовов. Сиротские, повторные и пропущенные результаты отклоняются. Definitions из прошлых ходов не обязательны для передачи истории.
+
+4. **Final Answer** — очередной обычный текстовый ответ:
+
+```json
+{
+  "id": "req_second",
+  "model": "smart-default",
+  "provider": "openai",
+  "output_text": "В Москве солнечно, +12 °C.",
+  "finish_reason": "stop",
+  "usage": {"input_tokens": 120, "output_tokens": 15}
+}
+```
+
+### Валидация и лимиты
+
+- Не более 2 MiB JSON на запрос, 256 сообщений, 128 definitions и 128 вызовов в одном assistant message / completion.
+- Не более 64 KiB сериализованного JSON на каждую схему и каждый объект аргументов; upstream body ограничен 4 MiB.
+- Уникальные имена инструментов: 1–64 ASCII-символа `[a-zA-Z0-9_-]`. Идентификаторы вызовов: 1–256 печатных ASCII-символов без пробелов, уникальные в истории.
+- Структура схемы проверяется библиотекой `jsonschema`; поддерживаются стандартные drafts библиотеки (по умолчанию 2020-12). Внешние HTTP/file references и пользовательские meta schemas, требующие загрузки, недоступны. Локальные `$ref` разрешены.
+- Аргументы новых вызовов должны быть JSON object и соответствовать объявленной схеме. Неизвестный инструмент, неверный JSON, повторный ID и нарушение `tool_choice` — `provider_invalid_response`, без фиктивного текстового ответа.
+- Поддержка tools и отдельных политик выбора зависит от модели и upstream. Явный отказ upstream нормализуется в `400 tool_calling_not_supported`; статического списка моделей и автоматического fallback на текст нет. Прочие upstream errors остаются `502 provider_error`.
+- Для запросов с инструментами prompt/response preview не сохраняются. Аргументы, результаты и исходные ошибки upstream не попадают в диагностические сообщения; сохраняются tenant/client, routing, latency, status и usage. Usage учитывается и для некорректных вызовов, если удалось разобрать envelope с usage.
 
 ### Ошибки
 
@@ -84,18 +173,23 @@ Gateway возвращает понятную внутреннюю ошибку:
 - `provider_timeout`
 - `provider_error`
 - `provider_invalid_response`
+- `tool_calling_not_supported`
 - `provider_transport_error`
 - `gateway_misconfigured`
 - `storage_error`
 
 ### HTTP status mapping
 
-- `400` — `invalid_request`
+- `400` — `invalid_request` / `tool_calling_not_supported`
 - `401` — отсутствующий или неизвестный bearer token
+- `403` — отключённый machine token
+- `413` — тело запроса превышает лимит 2 MiB (`invalid_request`)
 - `404` — `route_not_found`
 - `502` — provider error / invalid response / transport error
 - `504` — provider timeout
 - `500` — gateway misconfiguration / storage error
+
+Ошибки JSON и лимита HTTP body отклоняются до use case и не записываются в историю запросов.
 
 ## Admin API
 

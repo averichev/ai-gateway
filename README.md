@@ -43,7 +43,7 @@
 - users/tenants/tenant_members и session-based admin auth;
 - gateway clients с machine tokens для Factum backend;
 - encrypted-at-rest provider secrets через `GATEWAY_MASTER_KEY`;
-- `POST /api/v1/generate` для text generation;
+- `POST /api/v1/generate` для текста и структурированного Tool Calling;
 - admin API;
 - Swagger UI;
 - PrimeVue admin UI;
@@ -97,6 +97,77 @@ Authorization: Bearer <gateway-client-token>
 - [REST API](docs/rest-api.md)
 - Swagger UI: `GET /swagger-ui/`
 - OpenAPI JSON: `GET /api-docs/openapi.json`
+
+## Tool Calling
+
+Gateway передаёт definitions и результаты инструментов модели, возвращает один или несколько структурированных вызовов. Factum исполняет их и отправляет следующий запрос. Gateway не подключает MCP, не запускает инструменты и не ведёт agent loop.
+
+Пример полного цикла (каждый запрос — `POST /api/v1/generate` с machine token):
+
+1. Объявить инструмент:
+
+```json
+{
+  "model": "smart-default",
+  "messages": [{"role": "user", "content": "Погода в Москве?"}],
+  "tools": [{"name": "weather", "description": "Текущая погода", "parameters": {
+    "type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]
+  }}],
+  "tool_choice": "auto"
+}
+```
+
+2. Получить вызов:
+
+```json
+{
+  "id": "req_first", "model": "smart-default", "provider": "openai",
+  "output_text": "", "finish_reason": "tool_calls",
+  "tool_calls": [{"id": "call_1", "name": "weather", "arguments": {"city": "Москва"}}],
+  "usage": {"input_tokens": 80, "output_tokens": 20}
+}
+```
+
+3. После исполнения в приложении передать результат:
+
+```json
+{
+  "model": "smart-default",
+  "messages": [
+    {"role": "user", "content": "Погода в Москве?"},
+    {"role": "assistant", "tool_calls": [{"id": "call_1", "name": "weather", "arguments": {"city": "Москва"}}]},
+    {"role": "tool", "tool_call_id": "call_1", "content": "+12 °C, солнечно"}
+  ],
+  "tool_choice": "none"
+}
+```
+
+4. Получить финальный ответ:
+
+```json
+{
+  "id": "req_second", "model": "smart-default", "provider": "openai",
+  "output_text": "В Москве солнечно, +12 °C.", "finish_reason": "stop",
+  "usage": {"input_tokens": 120, "output_tokens": 15}
+}
+```
+
+Старые текстовые запросы и строковый `output_text` сохранены. `tool_choice` поддерживает `auto`, `none`, `required`, `{"name":"weather"}`. Поддержка конкретной модели определяется ответом upstream; явный отказ возвращается как `400 tool_calling_not_supported`.
+
+Лимиты: 2 MiB на запрос, 256 сообщений, 128 инструментов / вызовов за completion, 64 KiB на схему / объект аргументов. Аргументы проверяются по JSON Schema без сетевого и файлового доступа. Preview запросов с инструментами не сохраняется. Подробности и ошибки: [REST API](docs/rest-api.md#полный-цикл-tool-calling).
+
+## Проверки backend
+
+Интеграционные тесты поднимают контролируемый HTTP upstream и реальный Axum gateway. Нужен отдельный PostgreSQL с правом `CREATE DATABASE`: `sqlx::test` создаёт и удаляет отдельную БД для каждого теста. Не используйте production instance.
+
+```bash
+export DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/postgres
+cargo fmt --all -- --check
+cargo test
+cargo clippy --all-targets -- -D warnings
+```
+
+Тесты проверяют реальные HTTP payloads, полный цикл с одним/несколькими вызовами, `tool_choice`, сохранность аргументов, ошибки и лимиты, usage, machine auth, tenant-local routing и историю.
 
 ## Admin UI
 
@@ -182,7 +253,7 @@ docker run --rm -p 8080:8080 --env-file .env ai-gateway
 
 - streaming;
 - embeddings;
-- tools / function calling;
+- выполнение инструментов и agent orchestration;
 - image generation;
 - Anthropic-native adapter;
 - retries и fallback orchestration;

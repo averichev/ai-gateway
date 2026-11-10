@@ -143,8 +143,9 @@ pub async fn handle_generate(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(tenant_id): Path<Uuid>,
-    Json(payload): Json<AdminGenerateRequestDto>,
+    payload: Result<Json<AdminGenerateRequestDto>, axum::extract::rejection::JsonRejection>,
 ) -> Result<Json<GenerateResponseDto>, AppHttpError> {
+    let Json(payload) = payload.map_err(super::generate::generation_json_error)?;
     let principal = require_admin(&state, &headers).await?;
     require_tenant_access(&state, &principal, tenant_id, TenantPermission::Write).await?;
     let response = state

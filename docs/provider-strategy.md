@@ -53,6 +53,7 @@ custom-http
 - понятные ошибки upstream;
 - timeout handling;
 - нормализация usage;
+- Tool Calling: definitions, политика выбора, assistant calls и tool results;
 - устойчивость к неожиданным response shapes;
 - тесты на success, upstream error, timeout, invalid response.
 
@@ -109,7 +110,10 @@ src/providers/openai_compatible.rs
 - OpenAI-compatible request payload;
 - OpenAI-compatible response payload;
 - parsing `choices`, `message.content`, `usage`;
-- mapping upstream error body.
+- mapping upstream error body;
+- преобразование generic `{name, description, parameters}` в vendor tool definition;
+- преобразование generic `{id, name, arguments}` в vendor tool call и обратно;
+- нормализация `tool_choice` и `finish_reason`, проверка аргументов результата.
 
 OpenAI-specific детали не должны попадать в:
 
@@ -137,6 +141,22 @@ Adapter возвращает:
 - либо `ProviderError`, который use case преобразует в HTTP error и запись истории.
 
 Use case не должен знать, как устроен OpenAI, Claude или локальный сервер. Он должен знать только `provider.kind` и результат adapter.
+
+## Tool Calling
+
+Внутренний контракт содержит типизированные варианты сообщений `system`, `user`, `assistant`, `tool`, `ToolDefinitionDto`, `ToolCallDto` и `ToolChoiceDto`. JSON Schema и аргументы ограничены JSON objects; остальной контракт не является произвольным `serde_json::Value`.
+
+Gateway definition имеет вид `{name, description, parameters}`; вызов — `{id, name, arguments}` с объектом аргументов. `tool_choice` принимает `auto`, `none`, `required` или `{name}`. Вложенные `type: function`, `function`, JSON-строка `arguments` и поля Chat Completions существуют только внутри `openai_compatible.rs`. Формат преобразуется согласно [OpenAI Chat Completions reference](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create).
+
+Adapter возвращает `ProviderGenerateResult` с текстом, массивом вызовов, нормализованным reason и usage. Отсутствующий текст допустим при корректных вызовах; HTTP response сохраняет `output_text: ""`. Неверные аргументы (включая несоответствие объявленной JSON Schema), неизвестные инструменты, дубли ID и обрезанные вызовы возвращают `provider_invalid_response`, с reported usage при доступном envelope.
+
+Нет статического allowlist моделей: одинаковый external model id может обслуживаться разными совместимыми серверами. Явная ошибка upstream о неподдерживаемых tools / tool_choice / tool_calls нормализуется adapter в `ToolCallingNotSupported`, затем в HTTP `400 tool_calling_not_supported`. Если upstream молча игнорирует tools при `auto`, обычный текстовый ответ допустим; gateway не может достоверно определить отсутствие capability. Если upstream не предоставляет явной ошибки, прочие ошибки остаются `provider_error`. Автоматического удаления tools и повторной текстовой генерации нет.
+
+Use case валидирует общие ограничения и историю, сохраняет tenant/client-scoped usage, latency и status. Preview для запросов с инструментами отключается; исходные upstream errors не сохраняются. Provider credentials продолжают разрешаться существующим механизмом секретов.
+
+Полный поток: клиент объявляет definitions → adapter получает LLM tool calls → клиент исполняет инструменты → клиент передаёт assistant calls + tool results → adapter получает финальный ответ. [Полный JSON-пример](rest-api.md#полный-цикл-tool-calling).
+
+История и циклы принадлежат Factum. Gateway не выполняет вызовы, не подключается к MCP и не становится Agent Runtime. При добавлении Anthropic нужен отдельный adapter с преобразованием этого контракта, без изменений core в сторону OpenAI.
 
 ## Как добавлять новых providers
 
@@ -195,15 +215,15 @@ POST /v1/chat/completions
 
 - Не тащить OpenAI request/response в core domain как основной контракт.
 - Не добавлять Claude через хаки в `openai_compatible.rs`.
-- Не создавать преждевременно "универсальный AI runtime" для streaming, tools, embeddings и multimodal, пока эти сценарии не реализуются.
+- Не создавать "универсальный AI runtime" для исполнения tools, streaming, embeddings и multimodal.
 - Не хранить plaintext API keys в PostgreSQL.
 - Не делать provider-specific поля обязательными для всех providers.
 
 Расширять нужно capability-first:
 
 1. text/chat generation;
-2. streaming;
-3. tools/function calling;
+2. tools/function calling (структурированный транспорт реализован);
+3. streaming;
 4. embeddings;
 5. multimodal.
 

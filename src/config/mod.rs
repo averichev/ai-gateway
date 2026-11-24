@@ -14,6 +14,7 @@ pub struct AppConfig {
     pub default_provider_timeout_ms: i32,
     pub default_model_alias: String,
     pub default_external_model: String,
+    pub store_content_previews: bool,
     pub request_preview_chars: usize,
     pub response_preview_chars: usize,
     pub admin_dist_dir: String,
@@ -23,6 +24,8 @@ pub struct AppConfig {
 pub enum ConfigError {
     #[error("missing required environment variable `{0}`")]
     Missing(String),
+    #[error("environment variable `{0}` must be true or false")]
+    InvalidBoolean(String),
     #[error("invalid number in environment variable `{name}`: {source}")]
     InvalidNumber {
         name: String,
@@ -47,10 +50,23 @@ impl AppConfig {
             default_provider_timeout_ms: optional_parse("DEFAULT_PROVIDER_TIMEOUT_MS", 60_000)?,
             default_model_alias: optional("DEFAULT_MODEL_ALIAS", "smart-default"),
             default_external_model: optional("DEFAULT_EXTERNAL_MODEL", "gpt-4.1-mini"),
+            store_content_previews: parse_store_content_previews(
+                env::var("STORE_CONTENT_PREVIEWS").ok().as_deref(),
+            )?,
             request_preview_chars: optional_parse("REQUEST_PREVIEW_CHARS", 1_500)?,
             response_preview_chars: optional_parse("RESPONSE_PREVIEW_CHARS", 2_000)?,
             admin_dist_dir: optional("ADMIN_DIST_DIR", "admin/dist"),
         })
+    }
+}
+
+fn parse_store_content_previews(value: Option<&str>) -> Result<bool, ConfigError> {
+    match value {
+        None | Some("false") => Ok(false),
+        Some("true") => Ok(true),
+        _ => Err(ConfigError::InvalidBoolean(
+            "STORE_CONTENT_PREVIEWS".to_owned(),
+        )),
     }
 }
 
@@ -72,5 +88,21 @@ where
             source,
         }),
         Err(_) => Ok(default_value),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn content_previews_require_explicit_true() {
+        assert!(!parse_store_content_previews(None).unwrap());
+        assert!(!parse_store_content_previews(Some("false")).unwrap());
+        assert!(parse_store_content_previews(Some("true")).unwrap());
+        for value in ["", "TRUE", "1", "secret-value"] {
+            let error = parse_store_content_previews(Some(value)).unwrap_err();
+            assert!(!error.to_string().contains(value) || value.is_empty());
+        }
     }
 }

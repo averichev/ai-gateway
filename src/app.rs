@@ -2,7 +2,7 @@ use std::{path::Path, sync::Arc};
 
 use axum::{
     Json, Router,
-    extract::DefaultBodyLimit,
+    extract::{DefaultBodyLimit, MatchedPath},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, get_service, post},
@@ -25,6 +25,7 @@ use crate::{
     },
     security::SecretCrypto,
     usecases::generate::{GenerateService, ServiceError},
+    usecases::readiness::ReadinessService,
 };
 
 const HEALTHCHECK_DESCRIPTION: &str = r#"Проверяет, что HTTP-сервис запущен и способен ответить.
@@ -34,6 +35,7 @@ const HEALTHCHECK_DESCRIPTION: &str = r#"Проверяет, что HTTP-сер�
 #[derive(Clone)]
 pub struct AppState {
     pub generate_service: Arc<GenerateService>,
+    pub readiness_service: Arc<ReadinessService>,
     pub auth_repo: Arc<PostgresAuthRepository>,
     pub routes_repo: Arc<PostgresRoutesRepository>,
     pub requests_repo: Arc<PostgresRequestsRepository>,
@@ -95,6 +97,10 @@ pub fn build_app(state: AppState) -> Router {
             post(admin::save_model_route),
         )
         .route(
+            "/api/admin/tenants/{tenant_id}/model-routes/{alias}/readiness",
+            get(admin::model_route_readiness),
+        )
+        .route(
             "/api/admin/tenants/{tenant_id}/gateway-clients",
             get(admin::list_gateway_clients),
         )
@@ -103,7 +109,7 @@ pub fn build_app(state: AppState) -> Router {
             post(admin::create_gateway_client),
         )
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
-        .layer(TraceLayer::new_for_http())
+        .layer(TraceLayer::new_for_http().make_span_with(safe_http_span))
         .with_state(state);
 
     if Path::new(&admin_dist_dir).exists() {
@@ -114,6 +120,16 @@ pub fn build_app(state: AppState) -> Router {
     } else {
         router
     }
+}
+
+fn safe_http_span(request: &axum::http::Request<axum::body::Body>) -> tracing::Span {
+    // Raw URI, query, headers and bodies can all contain secrets.
+    let route = request
+        .extensions()
+        .get::<MatchedPath>()
+        .map(MatchedPath::as_str)
+        .unwrap_or("unmatched");
+    tracing::info_span!("http_request", method = %request.method(), route)
 }
 
 #[utoipa::path(
@@ -206,6 +222,8 @@ impl From<RepositoryError> for AppHttpError {
 
 impl IntoResponse for AppHttpError {
     fn into_response(self) -> Response {
+        tracing::warn!(request_id = %self.body.request_id, category = %self.body.error.code,
+            http_status = self.status_code.as_u16(), "HTTP request failed");
         (self.status_code, Json(self.body)).into_response()
     }
 }

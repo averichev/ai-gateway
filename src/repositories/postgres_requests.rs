@@ -15,6 +15,25 @@ impl PostgresRequestsRepository {
         Self { pool }
     }
 
+    pub async fn count_content_previews(
+        &self,
+        tenant_id: Option<Uuid>,
+    ) -> Result<i64, RepositoryError> {
+        Ok(sqlx::query_scalar(
+            "SELECT COUNT(*) FROM requests WHERE ($1::uuid IS NULL OR tenant_id = $1) AND (prompt_preview IS NOT NULL OR response_preview IS NOT NULL)"
+        ).bind(tenant_id).fetch_one(&self.pool).await?)
+    }
+
+    /// Explicit admin operation. Only preview columns change; history is retained.
+    pub async fn clear_content_previews(
+        &self,
+        tenant_id: Option<Uuid>,
+    ) -> Result<u64, RepositoryError> {
+        Ok(sqlx::query(
+            "UPDATE requests SET prompt_preview = NULL, response_preview = NULL WHERE ($1::uuid IS NULL OR tenant_id = $1) AND (prompt_preview IS NOT NULL OR response_preview IS NOT NULL)"
+        ).bind(tenant_id).execute(&self.pool).await?.rows_affected())
+    }
+
     pub async fn insert_request(&self, request: &RequestLogInsert) -> Result<(), RepositoryError> {
         sqlx::query(
             r#"

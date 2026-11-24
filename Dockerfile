@@ -21,6 +21,7 @@ RUN apt-get update \
 WORKDIR /app
 
 COPY --from=backend-build /app/target/release/ai-gateway /app/ai-gateway
+COPY --from=backend-build /app/target/release/purge_previews /app/purge_previews
 COPY --from=admin-build /app/admin/dist /app/admin/dist
 COPY docker/entrypoint.sh /app/entrypoint.sh
 COPY docker/postgresql.conf /etc/postgresql/postgresql.conf

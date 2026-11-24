@@ -41,8 +41,9 @@ pub async fn bootstrap_status(
 
 pub async fn bootstrap_register(
     State(state): State<AppState>,
-    Json(payload): Json<BootstrapRegisterRequestDto>,
+    payload: Result<Json<BootstrapRegisterRequestDto>, axum::extract::rejection::JsonRejection>,
 ) -> Result<Json<AuthResponseDto>, AppHttpError> {
+    let Json(payload) = payload.map_err(super::generate::generation_json_error)?;
     let email = normalize_email(&payload.email)?;
     let password = payload.password.trim();
 
@@ -60,10 +61,10 @@ pub async fn bootstrap_register(
         .filter(|value| !value.is_empty())
         .unwrap_or("Default tenant");
     let tenant_slug = slugify(tenant_name);
-    let password_hash = hash_password(password).map_err(|error| {
+    let password_hash = hash_password(password).map_err(|_| {
         AppHttpError::internal(
             "gateway_misconfigured",
-            format!("Не удалось подготовить password hash: {error}"),
+            "Не удалось подготовить password hash",
         )
     })?;
 
@@ -89,8 +90,9 @@ pub async fn bootstrap_register(
 
 pub async fn login(
     State(state): State<AppState>,
-    Json(payload): Json<LoginRequestDto>,
+    payload: Result<Json<LoginRequestDto>, axum::extract::rejection::JsonRejection>,
 ) -> Result<Json<AuthResponseDto>, AppHttpError> {
+    let Json(payload) = payload.map_err(super::generate::generation_json_error)?;
     let email = normalize_email(&payload.email)?;
     let user = state
         .auth_repo

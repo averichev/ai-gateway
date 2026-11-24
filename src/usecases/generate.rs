@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Instant};
 
 use axum::http::StatusCode;
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::{
@@ -20,8 +20,24 @@ pub struct GenerateService {
     requests_repo: Arc<PostgresRequestsRepository>,
     providers: ProviderRegistry,
     secret_crypto: SecretCrypto,
-    request_preview_chars: usize,
-    response_preview_chars: usize,
+    previews: ContentPreviewPolicy,
+}
+
+#[derive(Clone, Copy)]
+pub struct ContentPreviewPolicy {
+    pub enabled: bool,
+    pub request_chars: usize,
+    pub response_chars: usize,
+}
+
+impl Default for ContentPreviewPolicy {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            request_chars: 1500,
+            response_chars: 2000,
+        }
+    }
 }
 
 impl GenerateService {
@@ -30,16 +46,14 @@ impl GenerateService {
         requests_repo: Arc<PostgresRequestsRepository>,
         providers: ProviderRegistry,
         secret_crypto: SecretCrypto,
-        request_preview_chars: usize,
-        response_preview_chars: usize,
+        previews: ContentPreviewPolicy,
     ) -> Self {
         Self {
             routes_repo,
             requests_repo,
             providers,
             secret_crypto,
-            request_preview_chars,
-            response_preview_chars,
+            previews,
         }
     }
 
@@ -68,12 +82,13 @@ impl GenerateService {
         gateway_client_id: Option<Uuid>,
     ) -> Result<GenerateResponseDto, ServiceError> {
         let request_id = new_request_id();
+        let started_at = Instant::now();
         // Tools, arguments and results may contain secrets. Do not persist
         // previews for any request participating in a tool conversation.
-        let prompt_preview = if request.uses_tools() {
+        let prompt_preview = if !self.previews.enabled || request.uses_tools() {
             None
         } else {
-            preview_messages(&request.messages, self.request_preview_chars)
+            preview_messages(&request.messages, self.previews.request_chars)
         };
 
         if let Err(message) = request.validate() {
@@ -86,7 +101,7 @@ impl GenerateService {
                 provider_code: None,
                 external_model: None,
                 status: "invalid_request".to_owned(),
-                latency_ms: None,
+                latency_ms: Some(started_at.elapsed().as_millis() as i64),
                 error_message: Some(message.clone()),
                 input_tokens: None,
                 output_tokens: None,
@@ -103,21 +118,22 @@ impl GenerateService {
             ));
         }
 
-        let started_at = Instant::now();
-
-        let route = self
+        let context = GenerationContext {
+            request_id: &request_id,
+            request: &request,
+            tenant_id,
+            gateway_client_id,
+            prompt_preview: prompt_preview.clone(),
+            started_at,
+        };
+        let route = match self
             .routes_repo
             .resolve_route(tenant_id, &request.model)
             .await
-            .map_err(|error| {
-                error!(error = %error, "failed to resolve model route");
-                ServiceError::new(
-                    request_id.clone(),
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "storage_error",
-                    "Не удалось прочитать конфигурацию маршрутов".to_owned(),
-                )
-            })?;
+        {
+            Ok(route) => route,
+            Err(error) => return Err(self.storage_error(&context, None, error).await),
+        };
 
         let route = match route {
             Some(route) => route,
@@ -149,15 +165,6 @@ impl GenerateService {
             }
         };
 
-        let context = GenerationContext {
-            request_id: &request_id,
-            request: &request,
-            tenant_id,
-            gateway_client_id,
-            prompt_preview: prompt_preview.clone(),
-            started_at,
-        };
-
         let Some(adapter) = self.providers.get(&route.provider_kind) else {
             return Err(self
                 .provider_error_to_service_error(
@@ -167,19 +174,14 @@ impl GenerateService {
                 )
                 .await);
         };
-        let provider_secret = self
+        let provider_secret = match self
             .routes_repo
             .get_provider_secret(tenant_id, route.provider_id)
             .await
-            .map_err(|error| {
-                error!(error = %error, "failed to read provider secret");
-                ServiceError::new(
-                    request_id.clone(),
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "storage_error",
-                    "Не удалось прочитать provider secret",
-                )
-            })?;
+        {
+            Ok(secret) => secret,
+            Err(error) => return Err(self.storage_error(&context, Some(&route), error).await),
+        };
         let Some(provider_secret) = provider_secret else {
             return Err(self
                 .provider_error_to_service_error(
@@ -189,19 +191,7 @@ impl GenerateService {
                 )
                 .await);
         };
-        if provider_secret.algorithm != "AES-256-GCM" || provider_secret.key_version != 1 {
-            return Err(self
-                .provider_error_to_service_error(
-                    &context,
-                    &route,
-                    ProviderError::ProviderSecretUnavailable(route.provider_code.clone()),
-                )
-                .await);
-        }
-        let api_key = match self
-            .secret_crypto
-            .decrypt(&provider_secret.ciphertext, &provider_secret.nonce)
-        {
+        let api_key = match self.secret_crypto.provider_api_key(&provider_secret) {
             Ok(key) => key,
             Err(_) => {
                 return Err(self
@@ -223,10 +213,16 @@ impl GenerateService {
         };
 
         let latency_ms = started_at.elapsed().as_millis() as i64;
-        let response_preview = if request.uses_tools() || !result.tool_calls.is_empty() {
-            None
+        let response_preview =
+            if !self.previews.enabled || request.uses_tools() || !result.tool_calls.is_empty() {
+                None
+            } else {
+                truncate_preview(&result.output_text, self.previews.response_chars)
+            };
+        let prompt_preview = if result.tool_calls.is_empty() {
+            prompt_preview
         } else {
-            truncate_preview(&result.output_text, self.response_preview_chars)
+            None
         };
 
         self.store_request_log(RequestLogInsert {
@@ -254,9 +250,46 @@ impl GenerateService {
         ))
     }
 
+    async fn storage_error(
+        &self,
+        context: &GenerationContext<'_>,
+        route: Option<&ResolvedRouteRecord>,
+        error: RepositoryError,
+    ) -> ServiceError {
+        error!(category = error.category(), request_id = %context.request_id,
+            tenant_id = %context.tenant_id, model_alias = %context.request.model,
+            "failed to read generation configuration");
+        self.store_request_log(RequestLogInsert {
+            id: context.request_id.to_owned(),
+            tenant_id: context.tenant_id,
+            gateway_client_id: context.gateway_client_id,
+            model_alias: context.request.model.clone(),
+            provider_code: route.map(|route| route.provider_code.clone()),
+            external_model: route.map(|route| route.external_model.clone()),
+            status: "storage_error".to_owned(),
+            latency_ms: Some(context.started_at.elapsed().as_millis() as i64),
+            error_message: Some(format!("storage_error: {}", error.category())),
+            input_tokens: None,
+            output_tokens: None,
+            prompt_preview: context.prompt_preview.clone(),
+            response_preview: None,
+        })
+        .await;
+        ServiceError::new(
+            context.request_id.to_owned(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "storage_error",
+            "Не удалось прочитать конфигурацию генерации",
+        )
+    }
+
     async fn store_request_log(&self, request: RequestLogInsert) {
+        info!(request_id = %request.id, tenant_id = %request.tenant_id,
+            gateway_client_id = ?request.gateway_client_id, model_alias = %request.model_alias,
+            provider = ?request.provider_code, status = %request.status,
+            latency_ms = ?request.latency_ms, "generation completed");
         if let Err(error) = self.requests_repo.insert_request(&request).await {
-            warn!(error = %error, request_id = %request.id, "failed to persist request log");
+            warn!(category = error.category(), request_id = %request.id, model_alias = %request.model_alias, "failed to persist request log");
         }
     }
 
@@ -282,13 +315,17 @@ impl GenerateService {
             ProviderError::ToolCallingNotSupported => StatusCode::BAD_REQUEST,
             ProviderError::MissingProviderSecret(_)
             | ProviderError::ProviderSecretUnavailable(_)
-            | ProviderError::UnsupportedKind(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            | ProviderError::UnsupportedKind(_)
+            | ProviderError::InvalidConfiguration => StatusCode::INTERNAL_SERVER_ERROR,
         };
 
         let client_code = error.client_code().to_owned();
         let client_message = error.client_message();
         let storage_status = error.storage_status();
-        let storage_message = error.to_string();
+        let storage_message = error.safe_diagnostic();
+        warn!(%request_id, %tenant_id, %model_alias, %provider_code,
+            category = %client_code, http_status = status_code.as_u16(),
+            upstream_status = ?error.upstream_status(), "provider generation failed");
         let input_tokens = error.usage().and_then(|usage| usage.input_tokens);
         let output_tokens = error.usage().and_then(|usage| usage.output_tokens);
 
@@ -362,7 +399,7 @@ fn preview_messages(messages: &[GenerateMessageDto], max_chars: usize) -> Option
 }
 
 fn truncate_preview(value: &str, max_chars: usize) -> Option<String> {
-    if value.trim().is_empty() {
+    if max_chars == 0 || value.trim().is_empty() {
         return None;
     }
 
@@ -411,9 +448,10 @@ impl ServiceError {
 
 impl From<RepositoryError> for ServiceError {
     fn from(error: RepositoryError) -> Self {
-        error!(error = %error, "repository failure");
+        let request_id = new_request_id();
+        error!(category = error.category(), %request_id, "repository failure");
         Self::new(
-            new_request_id(),
+            request_id,
             StatusCode::INTERNAL_SERVER_ERROR,
             "storage_error",
             "Не удалось прочитать данные из хранилища".to_owned(),

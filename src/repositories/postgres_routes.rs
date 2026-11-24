@@ -276,7 +276,7 @@ impl PostgresRoutesRepository {
             .ok_or(RepositoryError::NotFound)
     }
 
-    async fn get_provider_by_code(
+    pub async fn get_provider_by_code(
         &self,
         tenant_id: Uuid,
         code: &str,
@@ -312,7 +312,7 @@ impl PostgresRoutesRepository {
         Ok(item)
     }
 
-    async fn get_model_route_by_alias(
+    pub async fn get_model_route_by_alias(
         &self,
         tenant_id: Uuid,
         alias: &str,

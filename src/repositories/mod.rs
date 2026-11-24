@@ -21,6 +21,19 @@ pub enum RepositoryError {
     Conflict(String),
 }
 
+impl RepositoryError {
+    /// Database Display/Debug can include failing row values, SQL and secrets.
+    pub fn category(&self) -> &'static str {
+        match self {
+            Self::Database(sqlx::Error::PoolTimedOut) => "pool_timeout",
+            Self::Database(sqlx::Error::Io(_) | sqlx::Error::Tls(_)) => "connection",
+            Self::Database(_) => "database",
+            Self::NotFound => "not_found",
+            Self::Conflict(_) => "conflict",
+        }
+    }
+}
+
 pub async fn seed_defaults(pool: &PgPool, config: &AppConfig) -> Result<(), RepositoryError> {
     let default_tenant_id: Uuid = sqlx::query_scalar(
         r#"

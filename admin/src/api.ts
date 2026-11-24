@@ -80,6 +80,17 @@ export interface ModelRouteItem {
   updated_at: string
 }
 
+export interface RouteReadiness {
+  model_alias: string
+  provider_code: string | null
+  status: 'ready' | 'incomplete' | 'unavailable'
+  checks: {
+    code: string
+    status: 'ok' | 'error' | 'skipped'
+    recommendation?: string
+  }[]
+}
+
 export interface GatewayClientItem {
   id: string
   tenant_id: string
@@ -267,6 +278,14 @@ export async function saveProviderSecret(
 
 export async function fetchModelRoutes(tenantId: string): Promise<ModelRouteItem[]> {
   const { data } = await adminApi.get<ModelRouteItem[]>(`/tenants/${tenantId}/model-routes`)
+  return data
+}
+
+export async function fetchRouteReadiness(tenantId: string, alias: string): Promise<RouteReadiness> {
+  const { data } = await adminApi.get<RouteReadiness>(
+    `/tenants/${encodeURIComponent(tenantId)}/model-routes/${encodeURIComponent(alias)}/readiness`,
+    { validateStatus: (status) => status === 200 || status === 404 },
+  )
   return data
 }
 

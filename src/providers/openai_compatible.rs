@@ -23,7 +23,11 @@ pub struct OpenAiCompatibleProvider {
 
 impl OpenAiCompatibleProvider {
     pub fn new() -> Result<Self, reqwest::Error> {
-        let client = Client::builder().user_agent("ai-gateway-mvp/0.1").build()?;
+        let client = Client::builder()
+            .user_agent("ai-gateway-mvp/0.1")
+            .redirect(reqwest::redirect::Policy::none())
+            .retry(reqwest::retry::never())
+            .build()?;
         Ok(Self { client })
     }
 
@@ -66,26 +70,35 @@ impl ProviderAdapter for OpenAiCompatibleProvider {
         "openai-compatible"
     }
 
+    fn validate_config(&self, route: &ResolvedRouteRecord) -> Result<(), &'static str> {
+        let url = reqwest::Url::parse(&route.provider_base_url)
+            .map_err(|_| "Укажите корректный HTTP(S) base URL провайдера")?;
+        if !matches!(url.scheme(), "http" | "https")
+            || url.host_str().is_none()
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.query().is_some()
+            || url.fragment().is_some()
+        {
+            return Err("Base URL должен использовать HTTP(S), без credentials, query и fragment");
+        }
+        Ok(())
+    }
+
     async fn generate(
         &self,
         route: &ResolvedRouteRecord,
         request: &GenerateRequestDto,
         api_key: &str,
     ) -> Result<ProviderGenerateResult, ProviderError> {
-        let payload = OpenAiRequestPayload::from_generate_request(
-            route,
-            request,
-            TokenLimitParameter::MaxTokens,
-        );
-        let (mut status, mut body) = self.send_chat_completion(route, api_key, &payload).await?;
-        if should_retry_with_max_completion_tokens(status, &body, request.options.max_tokens) {
-            let payload = OpenAiRequestPayload::from_generate_request(
-                route,
-                request,
-                TokenLimitParameter::MaxCompletionTokens,
-            );
-            (status, body) = self.send_chat_completion(route, api_key, &payload).await?;
+        if route.provider_timeout_ms <= 0
+            || route.external_model.trim().is_empty()
+            || self.validate_config(route).is_err()
+        {
+            return Err(ProviderError::InvalidConfiguration);
         }
+        let payload = OpenAiRequestPayload::from_generate_request(route, request);
+        let (status, body) = self.send_chat_completion(route, api_key, &payload).await?;
         if !status.is_success() {
             if request.uses_tools() && is_tool_calling_unsupported(status, &body) {
                 return Err(ProviderError::ToolCallingNotSupported);
@@ -231,15 +244,6 @@ fn map_transport_error(error: reqwest::Error) -> ProviderError {
     }
 }
 
-fn extract_error_message(body: &str) -> Option<String> {
-    let value: Value = serde_json::from_str(body).ok()?;
-    value
-        .pointer("/error/message")
-        .or_else(|| value.get("message"))
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-}
-
 fn is_tool_calling_unsupported(status: StatusCode, body: &str) -> bool {
     if !matches!(
         status,
@@ -282,26 +286,6 @@ fn is_tool_calling_unsupported(status: StatusCode, body: &str) -> bool {
         .any(|word| message.contains(word)))
 }
 
-fn should_retry_with_max_completion_tokens(
-    status: StatusCode,
-    body: &str,
-    max_tokens: Option<i32>,
-) -> bool {
-    if max_tokens.is_none()
-        || !matches!(
-            status,
-            StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY
-        )
-    {
-        return false;
-    }
-    let Some(message) = extract_error_message(body) else {
-        return false;
-    };
-    let message = message.to_ascii_lowercase();
-    message.contains("max_tokens") && message.contains("max_completion_tokens")
-}
-
 #[derive(Debug, Serialize)]
 struct OpenAiRequestPayload<'a> {
     model: &'a str,
@@ -314,20 +298,13 @@ struct OpenAiRequestPayload<'a> {
     temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    max_completion_tokens: Option<i32>,
 }
 
 impl<'a> OpenAiRequestPayload<'a> {
     fn from_generate_request(
         route: &'a ResolvedRouteRecord,
         request: &'a GenerateRequestDto,
-        token_limit_parameter: TokenLimitParameter,
     ) -> Self {
-        let (max_tokens, max_completion_tokens) = match token_limit_parameter {
-            TokenLimitParameter::MaxTokens => (request.options.max_tokens, None),
-            TokenLimitParameter::MaxCompletionTokens => (None, request.options.max_tokens),
-        };
         Self {
             model: &route.external_model,
             messages: request
@@ -351,16 +328,9 @@ impl<'a> OpenAiRequestPayload<'a> {
                 },
             }),
             temperature: request.options.temperature,
-            max_tokens,
-            max_completion_tokens,
+            max_tokens: request.options.max_tokens,
         }
     }
-}
-
-#[derive(Debug, Clone, Copy)]
-enum TokenLimitParameter {
-    MaxTokens,
-    MaxCompletionTokens,
 }
 
 #[derive(Debug, Serialize)]
@@ -598,7 +568,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn generate_retries_with_max_completion_tokens_when_model_rejects_max_tokens() {
+    async fn generate_does_not_retry_when_model_rejects_max_tokens() {
         let request_count = Arc::new(AtomicUsize::new(0));
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -636,10 +606,12 @@ mod tests {
             },
         };
 
-        let response = provider
+        let error = provider
             .generate(&route, &request, "test-token")
             .await
-            .unwrap();
+            .unwrap_err();
+        assert_eq!(error.client_code(), "provider_error");
+        assert_eq!(error.upstream_status(), Some(400));
 
         server.abort();
         tokio::time::timeout(Duration::from_secs(1), server)
@@ -647,9 +619,7 @@ mod tests {
             .expect("mock API server did not stop")
             .expect_err("mock API server stopped without abort");
 
-        assert_eq!(request_count.load(Ordering::SeqCst), 2);
-        assert_eq!(response.output_text, "pong");
-        assert_eq!(response.finish_reason, FinishReason::Stop);
+        assert_eq!(request_count.load(Ordering::SeqCst), 1);
     }
 
     async fn handle_chat_completions(

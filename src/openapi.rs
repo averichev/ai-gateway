@@ -1,4 +1,5 @@
-use utoipa::OpenApi;
+use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
+use utoipa::{Modify, OpenApi};
 
 use crate::{
     domain::{
@@ -6,6 +7,7 @@ use crate::{
         GenerateRequestDto, GenerateResponseDto, HealthResponseDto, NamedToolChoiceDto,
         TokenUsageDto, ToolCallDto, ToolChoiceDto, ToolChoicePolicy, ToolDefinitionDto,
     },
+    domain::{ReadinessCheckDto, ReadinessCheckStatus, ReadinessStatus, RouteReadinessDto},
     http::generate,
 };
 
@@ -44,9 +46,11 @@ const API_DESCRIPTION: &str = r#"AI Gateway - внутренний HTTP gateway 
 
 #[derive(OpenApi)]
 #[openapi(
+    modifiers(&AdminSecurity),
     paths(
         generate::handle_generate,
         crate::app::healthcheck,
+        crate::http::admin::model_route_readiness,
     ),
     components(
         schemas(
@@ -64,9 +68,14 @@ const API_DESCRIPTION: &str = r#"AI Gateway - внутренний HTTP gateway 
             NamedToolChoiceDto,
             FinishReason,
             TokenUsageDto,
+            RouteReadinessDto,
+            ReadinessCheckDto,
+            ReadinessStatus,
+            ReadinessCheckStatus,
         )
     ),
     tags(
+        (name = "admin", description = "Административная диагностика конфигурации маршрутов."),
         (name = "health", description = "Проверка доступности HTTP-сервиса."),
         (name = "generation", description = "Основной provider-agnostic API для клиентских приложений."),
     ),
@@ -77,6 +86,18 @@ const API_DESCRIPTION: &str = r#"AI Gateway - внутренний HTTP gateway 
     )
 )]
 pub struct ApiDoc;
+
+struct AdminSecurity;
+impl Modify for AdminSecurity {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        if let Some(components) = openapi.components.as_mut() {
+            components.add_security_scheme(
+                "admin_session",
+                SecurityScheme::Http(HttpBuilder::new().scheme(HttpAuthScheme::Bearer).build()),
+            );
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -93,7 +114,11 @@ mod tests {
             .and_then(Value::as_object)
             .expect("openapi should contain paths");
 
-        for path in ["/health", "/api/v1/generate"] {
+        for path in [
+            "/health",
+            "/api/v1/generate",
+            "/api/admin/tenants/{tenant_id}/model-routes/{alias}/readiness",
+        ] {
             assert!(paths.contains_key(path), "missing OpenAPI path: {path}");
         }
     }

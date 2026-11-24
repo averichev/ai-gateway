@@ -23,11 +23,13 @@ import HelpDrawer from '../components/HelpDrawer.vue'
 import {
   fetchModelRoutes,
   fetchProviders,
+  fetchRouteReadiness,
   formatApiError,
   formatDateTime,
   saveModelRoute,
   type ModelRouteItem,
   type ProviderItem,
+  type RouteReadiness,
 } from '../api'
 import { enabledSeverity, formatEnabled } from '../display'
 import {
@@ -49,6 +51,24 @@ const filters = ref({
 })
 const dialogVisible = ref(false)
 const helpVisible = ref(false)
+const readinessVisible = ref(false)
+const readinessLoading = ref(false)
+const readinessError = ref('')
+const readiness = ref<RouteReadiness | null>(null)
+const readinessRoute = ref<ModelRouteItem | null>(null)
+const readinessChecks = computed(() => {
+  const order = { error: 0, skipped: 1, ok: 2 }
+  return [...(readiness.value?.checks ?? [])].sort((a, b) => order[a.status] - order[b.status])
+})
+let readinessRun = 0
+const readinessLabels = { ready: 'Настроен', incomplete: 'Настройка не завершена', unavailable: 'Недоступен' }
+const checkLabels: Record<string, string> = {
+  model_route: 'Маршрут существует', model_route_enabled: 'Маршрут включён',
+  external_model: 'Внешнее имя модели', provider: 'Провайдер найден',
+  provider_enabled: 'Провайдер включён', provider_adapter: 'Поддержка типа провайдера',
+  provider_credentials: 'Авторизация провайдера', provider_parameters: 'Параметры подключения',
+  provider_timeout: 'Timeout',
+}
 const selectedRoute = ref<ModelRouteItem | null>(null)
 const contextMenu = ref<ContextMenuMethods | null>(null)
 const contextMenuSelection = ref<ModelRouteItem | null>(null)
@@ -110,6 +130,14 @@ const modelCatalogWarning = computed(() => {
 const canSubmit = computed(() => Boolean(form.value.alias.trim() && form.value.provider_code.trim() && form.value.external_model.trim()))
 const routeContextMenuItems = computed<MenuItem[]>(() => [
   {
+    label: 'Проверить готовность',
+    icon: 'pi pi-check-circle',
+    disabled: readinessLoading.value || !contextMenuSelection.value,
+    command: () => {
+      if (contextMenuSelection.value) void checkReadiness(contextMenuSelection.value)
+    },
+  },
+  {
     label: 'Изменить',
     icon: 'pi pi-pencil',
     disabled: !canWriteActiveTenant.value || !contextMenuSelection.value,
@@ -122,6 +150,25 @@ const routeContextMenuItems = computed<MenuItem[]>(() => [
     },
   },
 ])
+
+async function checkReadiness(route: ModelRouteItem) {
+  const tenantId = activeTenantId.value
+  if (!tenantId) return
+  const run = ++readinessRun
+  readinessRoute.value = route
+  readiness.value = null
+  readinessError.value = ''
+  readinessVisible.value = true
+  readinessLoading.value = true
+  try {
+    const result = await fetchRouteReadiness(tenantId, route.alias)
+    if (run === readinessRun && tenantId === activeTenantId.value) readiness.value = result
+  } catch (error) {
+    if (run === readinessRun) readinessError.value = formatApiError(error, 'Не удалось проверить готовность')
+  } finally {
+    if (run === readinessRun) readinessLoading.value = false
+  }
+}
 
 async function loadModelRoutes() {
   loading.value = true
@@ -227,6 +274,13 @@ async function submitRoute() {
 
 onMounted(loadModelRoutes)
 watch(activeTenantId, loadModelRoutes)
+watch(activeTenantId, () => {
+  readinessRun++
+  readinessVisible.value = false
+  readinessLoading.value = false
+  readiness.value = null
+  readinessRoute.value = null
+})
 </script>
 
 <template>
@@ -297,9 +351,10 @@ watch(activeTenantId, loadModelRoutes)
               {{ formatDateTime(data.updated_at) }}
             </template>
           </Column>
-          <Column :exportable="false" style="min-width: 8rem">
+          <Column :exportable="false" style="min-width: 21rem">
             <template #body="{ data }">
               <div class="flex gap-2">
+                <Button label="Проверить готовность" icon="pi pi-check-circle" outlined severity="secondary" :loading="readinessLoading && readinessRoute?.id === data.id" :disabled="readinessLoading" @click="checkReadiness(data)" />
                 <Button icon="pi pi-pencil" rounded outlined severity="secondary" aria-label="Изменить" :disabled="!canWriteActiveTenant" @click="openEditDialog(data)" />
                 <Button icon="pi pi-ellipsis-v" rounded outlined severity="secondary" aria-label="Действия" @click="openContextMenu($event, data)" />
               </div>
@@ -310,6 +365,30 @@ watch(activeTenantId, loadModelRoutes)
       </div>
     </div>
   </div>
+
+  <Dialog v-model:visible="readinessVisible" modal header="Готовность маршрута" class="admin-dialog" :style="{ width: '56rem', maxWidth: 'calc(100vw - 2rem)' }">
+    <Message severity="info" :closable="false" class="mb-4">
+      Проверяются только настройки. Доступность внешней модели и Tool Calling проверяются отдельным реальным вызовом.
+    </Message>
+    <dl class="summary-grid mb-4">
+      <div class="summary-item"><dt>Алиас</dt><dd>{{ readinessRoute?.alias }}</dd></div>
+      <div class="summary-item"><dt>Провайдер</dt><dd>{{ readiness?.provider_code ?? readinessRoute?.provider_code ?? '—' }}</dd></div>
+    </dl>
+    <Message v-if="readinessError" severity="error" :closable="false">{{ readinessError }}</Message>
+    <Tag v-if="readiness" class="mb-4" :value="readinessLabels[readiness.status]" :severity="readiness.status === 'ready' ? 'success' : readiness.status === 'incomplete' ? 'warn' : 'danger'" />
+    <DataTable :value="readinessChecks" :loading="readinessLoading" data-key="code">
+      <Column header="Проверка"><template #body="{ data }">{{ checkLabels[data.code] ?? data.code }}</template></Column>
+      <Column header="Результат">
+        <template #body="{ data }">
+          <Tag :value="data.status === 'ok' ? 'Готово' : data.status === 'error' ? 'Проблема' : 'Пропущено'" :severity="data.status === 'ok' ? 'success' : data.status === 'error' ? 'danger' : 'secondary'" />
+        </template>
+      </Column>
+      <Column field="recommendation" header="Рекомендация" />
+    </DataTable>
+    <template #footer>
+      <Button label="Закрыть" severity="secondary" text @click="readinessVisible = false" />
+    </template>
+  </Dialog>
 
   <Dialog v-model:visible="dialogVisible" modal header="Маршрут модели" class="admin-dialog">
     <form class="admin-form" @submit.prevent="submitRoute">
@@ -406,6 +485,11 @@ watch(activeTenantId, loadModelRoutes)
         <span class="code-value">model</span> с алиасом. Шлюз находит маршрут, выбирает
         провайдера и отправляет ему запрос с внешним именем модели.
       </p>
+    </section>
+
+    <section>
+      <h5>Проверка готовности</h5>
+      <p>Действие «Проверить готовность» проверяет маршрут, провайдера, авторизацию и timeout без вызова LLM. Для реального запроса откройте «Проверка генерации». Полный цикл Tool Calling проверяется скриптом scripts/smoke_llm.py.</p>
     </section>
 
     <section>

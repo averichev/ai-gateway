@@ -204,6 +204,8 @@ http://localhost:8080/
 - `DEFAULT_PROVIDER_TIMEOUT_MS`
 - `DEFAULT_MODEL_ALIAS`
 - `DEFAULT_EXTERNAL_MODEL`
+- `STORE_CONTENT_PREVIEWS` — `false` по умолчанию; только явное `true` включает previews обычного текста
+- `REQUEST_PREVIEW_CHARS`, `RESPONSE_PREVIEW_CHARS` — лимиты previews (1500/2000)
 
 Пример значений находится в [.env.example](.env.example).
 
@@ -273,3 +275,40 @@ docker run --rm -p 8080:8080 --env-file .env ai-gateway
 - [Deploy on VPS](docs/vps-deploy.md)
 - [Server CTL](docs/server-ctl.md)
 - [Architecture](architecture.md)
+
+## Безопасная история и диагностика маршрутов (G02)
+
+`STORE_CONTENT_PREVIEWS=false` — безопасное значение по умолчанию, в том числе при отсутствии переменной. В `requests` остаются request/tenant/client IDs, alias, provider, external model, status, latency, usage, техническая ошибка и время. `prompt_preview` и `response_preview` равны `null`; контракт истории и схема таблицы сохранены.
+
+Явное `STORE_CONTENT_PREVIEWS=true` разрешает временную диагностику обычного текста с лимитами `REQUEST_PREVIEW_CHARS=1500` и `RESPONSE_PREVIEW_CHARS=2000`. Эти записи могут содержать конфиденциальные данные. Запросы с `tools`, `tool_choice`, assistant tool calls или tool results исключены всегда. Настройка применяется после перезапуска и не очищает старые записи.
+
+Очистка старых previews — отдельная операция администратора. Сначала сделайте резервную копию БД. Без `--apply` команда только показывает число записей, не выводя содержимое:
+
+```bash
+cargo run --bin purge_previews --
+cargo run --bin purge_previews -- --tenant-id <tenant-uuid>
+# После проверки количества и резервного копирования:
+cargo run --bin purge_previews -- --tenant-id <tenant-uuid> --apply
+```
+
+Без `--tenant-id` выбираются все tenants. Меняются только два preview-поля, история и metadata остаются. Восстановление возможно из backup; прежние backups и WAL эта команда не очищает. В Docker образ включён `/app/purge_previews`. Порядок backup и очистки: [деплой](docs/vps-deploy.md#безопасная-история-и-очистка-previews).
+
+`GET /api/admin/tenants/{tenant_id}/model-routes/{alias}/readiness` требует admin session и доступ к tenant. Проверяет включённость route/provider, adapter, внешнее имя модели, параметры URL, timeout и возможность прочитать credentials. Возвращает `ready`, `incomplete` или `unavailable` с машинными проверками и рекомендациями; не выполняет сетевых запросов. В Admin UI: **Маршруты моделей → Проверить готовность**. `/health` по-прежнему проверяет только HTTP-сервис.
+
+Для реальной проверки текстовой генерации и полного Tool Calling round-trip используйте Python 3.10+ и действующий machine token выбранного tenant:
+
+```bash
+# В bash: ввод скрыт и не попадает в историю команд.
+read -r -s GATEWAY_MACHINE_TOKEN
+export GATEWAY_MACHINE_TOKEN
+python3 scripts/smoke_llm.py --url http://127.0.0.1:8080 --model smart-default --timeout 90
+unset GATEWAY_MACHINE_TOKEN
+```
+
+Все параметры можно передать через `GATEWAY_URL`, `GATEWAY_MACHINE_TOKEN`, `GATEWAY_MODEL_ALIAS`, `GATEWAY_TIMEOUT`; есть также `--token` (предпочтительнее env, чтобы не раскрыть token в process list). Скрипт делает реальные `POST /api/v1/generate`: текст, вызов `demo_add_numbers(12500, 7500)`, затем ответ с локально вычисленной суммой. Gateway инструмент не выполняет. Печатаются только JSON-строки с success, HTTP status, request ID, alias, latency, usage и категорией ошибки. Код завершения: `0` — всё успешно, `1` — сценарий не прошёл, `2` — неверная конфигурация скрипта. Неподдерживаемый или проигнорированный Tool Calling — ошибка, а не успех.
+
+Эти вызовы могут тарифицироваться провайдером и запускаются только явно. Readiness не подтверждает доступность модели, действительность ключа у провайдера или поддержку Tool Calling. Ручная «Проверка генерации» в Admin UI также выполняет реальный вызов, проверяет только текст и сохраняет существующий контракт. Автоматических повторов, fallback и переходов по upstream redirects нет; в том числе удалён прежний повтор с заменой `max_tokens`. Если модель отклоняет этот параметр, исключите `options.max_tokens` и повторите вручную.
+
+CI и `cargo test` используют только mock upstream и отдельный PostgreSQL, без оплачиваемого API. Интеграционные тесты дополнительно запускают сам Python-скрипт через Gateway с mock upstream, проверяют admin smoke-test, CLI-очистку и отсутствие секретов в диагностике. Сборка Admin UI: `cd admin && npm ci && npm run build` (Node.js 22.12+).
+
+Подробные статусы readiness и диагностика ошибок: [REST API](docs/rest-api.md#диагностика-маршрута-модели).

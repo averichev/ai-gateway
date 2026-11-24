@@ -15,6 +15,9 @@ pub use openai_compatible::OpenAiCompatibleProvider;
 pub trait ProviderAdapter: Send + Sync {
     fn kind(&self) -> &'static str;
 
+    /// Pure configuration validation; must never contact upstream.
+    fn validate_config(&self, route: &ResolvedRouteRecord) -> Result<(), &'static str>;
+
     async fn generate(
         &self,
         route: &ResolvedRouteRecord,
@@ -65,6 +68,8 @@ pub enum ProviderError {
     ProviderSecretUnavailable(String),
     #[error("unsupported provider kind `{0}`")]
     UnsupportedKind(String),
+    #[error("invalid provider configuration")]
+    InvalidConfiguration,
     #[error("provider transport error: {0}")]
     Transport(String),
 }
@@ -78,7 +83,8 @@ impl ProviderError {
             Self::ToolCallingNotSupported => "tool_calling_not_supported",
             Self::MissingProviderSecret(_)
             | Self::ProviderSecretUnavailable(_)
-            | Self::UnsupportedKind(_) => "gateway_misconfigured",
+            | Self::UnsupportedKind(_)
+            | Self::InvalidConfiguration => "gateway_misconfigured",
             Self::Transport(_) => "provider_transport_error",
         }
     }
@@ -90,7 +96,13 @@ impl ProviderError {
     pub fn client_message(&self) -> String {
         match self {
             Self::Timeout(_) => "Провайдер не ответил вовремя".to_owned(),
-            Self::Upstream { message, .. } => format!("Провайдер вернул ошибку: {message}"),
+            Self::Upstream {
+                status: Some(status),
+                ..
+            } => {
+                format!("Провайдер вернул ошибку: HTTP {status} from upstream")
+            }
+            Self::Upstream { status: None, .. } => "Провайдер вернул ошибку".to_owned(),
             Self::InvalidResponse { .. } => "Провайдер вернул некорректный ответ".to_owned(),
             Self::ToolCallingNotSupported => {
                 "Выбранная модель или провайдер не поддерживает запрошенный Tool Calling".to_owned()
@@ -104,7 +116,23 @@ impl ProviderError {
             Self::UnsupportedKind(kind) => {
                 format!("Gateway не умеет работать с provider kind `{kind}`")
             }
+            Self::InvalidConfiguration => "Некорректные параметры provider или маршрута".to_owned(),
             Self::Transport(_) => "Не удалось связаться с AI-провайдером".to_owned(),
+        }
+    }
+
+    pub fn upstream_status(&self) -> Option<u16> {
+        match self {
+            Self::Upstream { status, .. } => *status,
+            _ => None,
+        }
+    }
+
+    /// Never persist Display/Debug or free-form adapter error messages.
+    pub fn safe_diagnostic(&self) -> String {
+        match self.upstream_status() {
+            Some(status) => format!("{}: upstream HTTP {status}", self.client_code()),
+            None => self.client_code().to_owned(),
         }
     }
 
@@ -117,5 +145,35 @@ impl ProviderError {
 
     pub fn storage_status(&self) -> String {
         self.status_label().to_owned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn free_form_adapter_errors_never_reach_history_or_clients() {
+        for error in [
+            ProviderError::Timeout("private-url?key=secret".to_owned()),
+            ProviderError::Transport("Bearer private-credential".to_owned()),
+            ProviderError::InvalidResponse {
+                message: "private-tool-arguments".to_owned(),
+                usage: None,
+            },
+            ProviderError::Upstream {
+                status: Some(503),
+                message: "private-document".to_owned(),
+            },
+        ] {
+            assert!(!error.safe_diagnostic().contains("private"));
+            assert!(!error.client_message().contains("private"));
+        }
+        let error = ProviderError::Upstream {
+            status: Some(503),
+            message: "private-document".to_owned(),
+        };
+        assert!(error.safe_diagnostic().contains("503"));
+        assert_eq!(error.client_code(), "provider_error");
     }
 }

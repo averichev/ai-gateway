@@ -27,7 +27,7 @@ Plaintext provider API key не хранится и не возвращаетс�
 - env: `GATEWAY_MASTER_KEY=<base64-32-byte-key>`
 - DB: `ciphertext`, `nonce`, `algorithm`, `key_version`
 
-Decrypted key существует только внутри generate flow перед вызовом provider adapter. Его нельзя логировать, возвращать в API или писать в request history.
+Decrypted key существует только в памяти при generate flow и локальной проверке readiness; readiness не обращается к upstream. Его нельзя логировать, возвращать в API или писать в request history.
 
 ## Routing flow
 
@@ -54,3 +54,9 @@ Decrypted key существует только внутри generate flow пе�
 4. Создать/обновить model route на этот `provider_code`.
 
 Новый provider kind в коде по-прежнему добавляется через отдельный adapter в `src/providers/` и регистрацию в `ProviderRegistry`.
+
+## История и readiness
+
+`STORE_CONTENT_PREVIEWS=false` по умолчанию сохраняет только технические metadata. Даже при явном `true` previews для Tool Calling и его истории запрещены. Старые previews очищаются только командой администратора `purge_previews --apply` после dry run и backup; строки истории остаются. [Порядок очистки](vps-deploy.md#безопасная-история-и-очистка-previews).
+
+Readiness — отдельный use case: читает route без фильтра enabled, затем tenant-local provider, проверяет registry/adapter configuration, timeout и доступность credentials. Не вызывает provider.generate, не выполняет сетевых запросов и не добавляет историю. Так выключенный route/provider диагностируется отдельно от отсутствующего alias. Административный endpoint сначала проверяет доступ к tenant. `/health` сохраняет прежнюю семантику.

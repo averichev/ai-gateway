@@ -149,7 +149,7 @@ Tenant определяется по machine token. Alias ищется толь�
 - Структура схемы проверяется библиотекой `jsonschema`; поддерживаются стандартные drafts библиотеки (по умолчанию 2020-12). Внешние HTTP/file references и пользовательские meta schemas, требующие загрузки, недоступны. Локальные `$ref` разрешены.
 - Аргументы новых вызовов должны быть JSON object и соответствовать объявленной схеме. Неизвестный инструмент, неверный JSON, повторный ID и нарушение `tool_choice` — `provider_invalid_response`, без фиктивного текстового ответа.
 - Поддержка tools и отдельных политик выбора зависит от модели и upstream. Явный отказ upstream нормализуется в `400 tool_calling_not_supported`; статического списка моделей и автоматического fallback на текст нет. Прочие upstream errors остаются `502 provider_error`.
-- Для запросов с инструментами prompt/response preview не сохраняются. Аргументы, результаты и исходные ошибки upstream не попадают в диагностические сообщения; сохраняются tenant/client, routing, latency, status и usage. Usage учитывается и для некорректных вызовов, если удалось разобрать envelope с usage.
+- По умолчанию previews не сохраняются ни для каких запросов (`STORE_CONTENT_PREVIEWS=false`). Для запросов с инструментами previews не сохраняются и при явном включении. Аргументы, результаты и исходные ошибки upstream не попадают в диагностические сообщения; сохраняются tenant/client, routing, latency, status и usage. Usage учитывается и для некорректных вызовов, если удалось разобрать envelope с usage.
 
 ### Ошибки
 
@@ -215,6 +215,7 @@ Gateway возвращает понятную внутреннюю ошибку:
 - `POST /api/admin/tenants/:tenant_id/providers/:provider_id/secret`
 - `GET /api/admin/tenants/:tenant_id/model-routes`
 - `POST /api/admin/tenants/:tenant_id/model-routes`
+- `GET /api/admin/tenants/:tenant_id/model-routes/:alias/readiness`
 - `GET /api/admin/tenants/:tenant_id/gateway-clients`
 - `POST /api/admin/tenants/:tenant_id/gateway-clients`
 - `POST /api/admin/tenants/:tenant_id/generate`
@@ -273,3 +274,84 @@ API responses возвращают только `api_key_configured: true|false`
 ```
 
 В MVP он проверяет только доступность самого HTTP-сервиса, а не полноценный deep health upstream-провайдера.
+
+## Безопасное хранение истории
+
+По умолчанию `STORE_CONTENT_PREVIEWS=false`. Отсутствующее значение также отключает previews. Ни system/user messages, ни ответы модели, RAG-контекст, аргументы и результаты инструментов в `requests` не сохраняются. Схема и history API не меняются: `prompt_preview`/`response_preview` присутствуют в details как `null`, технические metadata остаются.
+
+При явном `STORE_CONTENT_PREVIEWS=true` обычные текстовые запросы получают previews с прежними лимитами `REQUEST_PREVIEW_CHARS` (1500) и `RESPONSE_PREVIEW_CHARS` (2000) Unicode-символов; к усечённому тексту добавляется `...`. Нулевой лимит отключает соответствующий preview. Наличие `tools`, любого `tool_choice`, assistant `tool_calls` или сообщения `role=tool` отключает оба previews независимо от настройки. Ответ с tool calls также исключён. Неверное значение переменной останавливает старт с ошибкой конфигурации без вывода значения.
+
+Ошибки JSON, JSON Schema и provider responses не включают исходный текст, аргументы, заголовки, ключи или URL. История ошибок содержит техническую категорию и upstream HTTP status, когда он известен. Диагностические события включают request ID, alias/tenant/provider, latency и коды ошибок. HTTP tracing использует шаблон маршрута, без полного URI и query. SQL statement logging отключён; в application log допускаются только собственные структурированные события и безопасный HTTP trace, в том числе при `RUST_LOG=trace`.
+
+Это действует для новых запросов. Для старых previews используйте `purge_previews`: сначала dry run, backup, затем явный `--apply`; [порядок очистки](../README.md#безопасная-история-и-диагностика-маршрутов-g02). Приложение не очищает их при старте. Старые журналы, backup/WAL и другие поля эта команда не переписывает.
+
+## Диагностика маршрута модели
+
+### GET `/api/admin/tenants/{tenant_id}/model-routes/{alias}/readiness`
+
+Требует `Authorization: Bearer <admin-session-token>` и существующее право чтения tenant (owner/tenant_admin/viewer). Machine token не подходит. Сначала проверяется доступ к tenant, затем читаются route/provider. Для чужого и неизвестного tenant пользователь без доступа получает одинаковый `403`; существование alias не раскрывается. Alias в URL необходимо percent-encode.
+
+Пример корректной конфигурации, HTTP `200`:
+
+```json
+{
+  "model_alias": "smart-default",
+  "provider_code": "openai",
+  "status": "ready",
+  "checks": [
+    {"code": "model_route", "status": "ok"},
+    {"code": "model_route_enabled", "status": "ok"},
+    {"code": "external_model", "status": "ok"},
+    {"code": "provider", "status": "ok"},
+    {"code": "provider_enabled", "status": "ok"},
+    {"code": "provider_timeout", "status": "ok"},
+    {"code": "provider_adapter", "status": "ok"},
+    {"code": "provider_parameters", "status": "ok"},
+    {"code": "provider_credentials", "status": "ok"}
+  ]
+}
+```
+
+Общие статусы:
+
+| status | Значение |
+| --- | --- |
+| `ready` | Все локальные проверки прошли |
+| `incomplete` | Не хватает route/provider/credentials или некорректны параметры |
+| `unavailable` | Route/provider отключён, adapter не поддержан либо сохранённый secret недоступен |
+
+`unavailable` имеет приоритет, если выявлено несколько проблем. Статус отдельной проверки: `ok`, `error`, `skipped`; при проблеме возвращается безопасная `recommendation`. Если отсутствует route, ответ имеет HTTP `404`, `status=incomplete`, `provider_code=null` и единственную проверку `model_route=error`. Зависимые проверки не выполняются. Для неизвестного adapter `provider_parameters=skipped`. Иные проблемы конфигурации возвращаются в HTTP `200` с соответствующим общим status. Ошибки авторизации — `401/403`, хранилища — `500 storage_error` в стандартном формате ошибки с request ID.
+
+`provider_parameters` проверяется зарегистрированным adapter: текущий `openai-compatible` требует HTTP(S) URL с host без userinfo, query и fragment. Проверка timeout требует положительного `timeout_ms`. Credentials проверяются локально тем же кодом, что при генерации: secret существует, поддержаны algorithm/key version, данные расшифровываются текущим master key, ключ непустой и допустим как Bearer header. Ответ не содержит plaintext, ciphertext, nonce или URL.
+
+Readiness не вызывает `ProviderAdapter.generate`, не отправляет HTTP/DNS-запросов к provider и не создаёт request history. `ready` **не подтверждает** успешную генерацию, действительность API key у upstream, существование внешней модели или поддержку Tool Calling. `/health` остаётся shallow HTTP check.
+
+### Реальный smoke-test
+
+Последовательность перед демонстрацией:
+
+1. Выберите tenant, provider и alias, сохраните credentials.
+2. Запустите «Проверить готовность» в Admin UI и устраните перечисленные проблемы.
+3. Явно запустите `python3 scripts/smoke_llm.py --url <gateway-url> --model <alias> --timeout 90`, передав machine token в `GATEWAY_MACHINE_TOKEN`.
+4. Убедитесь, что JSON-строки `text`, `tool_call`, `tool_result` имеют `success=true`. Скрипт проверяет HTTP 200, request IDs, совпадение alias, текст, finish_reason, структуру usage при наличии, имя/ID/JSON-аргументы инструмента и финальный ответ с суммой 20000.
+
+При неуспехе первого tool-вызова финальный запрос не выполняется. Никакого произвольного кода модели скрипт не исполняет: допускается только фиксированное сложение проверенных чисел. Полные prompt, tool results, ответы и секреты не печатаются. Если provider не сообщает usage, значение отчёта `usage=null` допустимо. Ошибки и их категории дают ненулевой exit code. Встроенного mock-режима у скрипта нет; тесты проекта запускают его с отдельно поднятым mock upstream.
+
+### Типичные ошибки
+
+| Категория / проверка | Действие |
+| --- | --- |
+| `model_route=error`, `route_not_found` | Проверьте tenant, alias и включённость route/provider |
+| `provider_adapter=error` | Укажите зарегистрированный kind; для совместимых API — `openai-compatible` |
+| `provider_credentials=error`, `gateway_misconfigured` | Сохраните API key; при проблеме расшифровки проверьте master key и key version |
+| `provider_parameters=error` | Исправьте HTTP(S) base URL, исключите credentials/query/fragment |
+| `provider_timeout=error` | Задайте положительный timeout_ms |
+| `provider_error` | Сопоставьте request ID и upstream HTTP status: 401/403 — авторизация/доступ, 404 — модель или путь, 429 — ограничение upstream, 5xx — сбой upstream |
+| `provider_timeout`, `client_timeout` | Проверьте сеть и таймауты; timeout скрипта задайте с запасом относительно provider timeout |
+| `provider_transport_error` | Проверьте адрес, сеть и TLS; секретный URL в диагностику не включается |
+| `provider_invalid_response` | Проверьте совместимость API и корректность возвращаемых tool calls/аргументов |
+| `tool_calling_not_supported`, `tool_call_not_returned` | Выберите модель с Tool Calling и повторите явный smoke-test; результат не считается успешным |
+| `invalid_request` | Проверьте JSON, лимиты, JSON Schema и полноту истории tool calls/results |
+| `storage_error`, `failed to persist request log` | Проверьте PostgreSQL по технической категории; ошибка записи истории не отменяет уже выполненную генерацию |
+
+Gateway и smoke-test не делают автоматических повторов, fallback или переходов по upstream redirect. Если модель отклонила `max_tokens`, опустите `options.max_tokens` и повторите вручную; smoke-test изначально не задаёт provider-specific ограничения токенов.

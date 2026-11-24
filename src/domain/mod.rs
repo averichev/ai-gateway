@@ -54,6 +54,7 @@ pub struct GenerateRequestDto {
 /// The shape is the same as `GenerateRequestDto`. Provider credentials are
 /// resolved from the selected tenant's encrypted provider secret.
 #[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(transparent)]
 #[schema(example = json!({
     "model": "smart-default",
     "messages": [
@@ -65,8 +66,8 @@ pub struct GenerateRequestDto {
     }
 }))]
 pub struct AdminGenerateRequestDto {
-    /// Flattened generation request fields.
-    #[serde(flatten)]
+    /// Transparent wrapper preserves the generation JSON, including precise
+    /// numbers. serde(flatten) buffers arbitrary_precision numbers as maps.
     pub request: GenerateRequestDto,
 }
 
@@ -261,6 +262,39 @@ pub struct HealthResponseDto {
     /// Health status of the HTTP service.
     #[schema(example = "ok")]
     pub status: String,
+}
+
+/// Confirms configuration, never upstream availability or capability.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct RouteReadinessDto {
+    pub model_alias: String,
+    pub provider_code: Option<String>,
+    pub status: ReadinessStatus,
+    pub checks: Vec<ReadinessCheckDto>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ReadinessStatus {
+    Ready,
+    Incomplete,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ReadinessCheckDto {
+    pub code: String,
+    pub status: ReadinessCheckStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recommendation: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ReadinessCheckStatus {
+    Ok,
+    Error,
+    Skipped,
 }
 
 #[derive(Debug, Clone, Serialize, FromRow)]

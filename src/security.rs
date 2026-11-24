@@ -41,6 +41,23 @@ pub struct EncryptedSecret {
 }
 
 impl SecretCrypto {
+    /// Use the same credential checks for generation and configuration readiness.
+    pub fn provider_api_key(
+        &self,
+        secret: &crate::domain::ProviderSecretRecord,
+    ) -> Result<String, SecurityError> {
+        if secret.algorithm != "AES-256-GCM" || secret.key_version != 1 {
+            return Err(SecurityError::Decrypt);
+        }
+        let key = self.decrypt(&secret.ciphertext, &secret.nonce)?;
+        if key.trim().is_empty()
+            || reqwest::header::HeaderValue::from_str(&format!("Bearer {key}")).is_err()
+        {
+            return Err(SecurityError::Decrypt);
+        }
+        Ok(key)
+    }
+
     pub fn from_base64(master_key: &str) -> Result<Self, SecurityError> {
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(master_key.trim())

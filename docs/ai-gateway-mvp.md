@@ -150,7 +150,7 @@ VALUES ('00000000-0000-0000-0000-000000000000', 'reasoning-default', 'openai', '
 ## Ограничения текущей версии
 
 - adapter сейчас рассчитан на OpenAI-compatible `chat/completions`;
-- история хранит только preview, а не полный prompt/response;
+- история по умолчанию хранит только технические metadata; ограниченные previews обычного текста доступны при STORE_CONTENT_PREVIEWS=true, Tool Calling всегда исключён;
 - route resolution пока работает только для enabled-конфигураций;
 - retries и fallback отсутствуют;
 - UI покрывает setup/login, tenants, gateway clients, providers, model routes, request history и smoke-test.

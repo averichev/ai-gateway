@@ -134,9 +134,15 @@ watch(activeTenantId, loadRoutes)
           <div class="admin-section-header">
             <div>
               <h4>Проверка генерации</h4>
-              <div class="text-muted">Ручная проверка полного маршрута через шлюз</div>
+              <div class="text-muted">Реальный запрос к внешней модели через шлюз</div>
             </div>
           </div>
+
+          <Message severity="info" :closable="false" class="mb-4">
+            Кнопка «Отправить» вызывает LLM и может расходовать платные токены.
+            Проверка настроек без вызова доступна в разделе «Маршруты моделей» → «Проверить готовность».
+            Для проверки Tool Calling используйте scripts/smoke_llm.py.
+          </Message>
 
           <Message v-if="routesError" severity="warn" :closable="false" class="mb-4">
             {{ routesError }}
@@ -191,6 +197,7 @@ watch(activeTenantId, loadRoutes)
                   <InputNumber id="maxTokens" v-model="maxTokens" :min="1" :step="1" show-buttons />
                   <p class="field-help">
                     Это лимит длины ответа провайдера. Если он мал, ответ будет обрезан.
+                    Если провайдер отклоняет этот параметр, очистите поле и повторите вручную.
                   </p>
                 </div>
               </div>

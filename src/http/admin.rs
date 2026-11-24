@@ -1,7 +1,7 @@
 use axum::{
     Json,
     extract::{Path, Query, State},
-    http::HeaderMap,
+    http::{HeaderMap, StatusCode},
 };
 use serde::Deserialize;
 use uuid::Uuid;
@@ -11,8 +11,9 @@ use crate::{
     domain::{
         AdminGenerateRequestDto, AdminUserDto, CreateGatewayClientRequestDto,
         CreateTenantRequestDto, CreateUserRequestDto, CreatedGatewayClientDto, GatewayClientDto,
-        GenerateResponseDto, ModelRouteDto, ProviderDto, RequestDetailsDto, RequestListItemDto,
-        SaveModelRouteRequestDto, SaveProviderRequestDto, SaveProviderSecretRequestDto, TenantDto,
+        GenerateResponseDto, ModelRouteDto, ProviderDto, ReadinessCheckStatus, RequestDetailsDto,
+        RequestListItemDto, RouteReadinessDto, SaveModelRouteRequestDto, SaveProviderRequestDto,
+        SaveProviderSecretRequestDto, TenantDto,
     },
     http::auth::{TenantPermission, require_admin, require_tenant_access, slugify},
     repositories::RepositoryError,
@@ -44,8 +45,9 @@ pub async fn list_tenants(
 pub async fn create_tenant(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(payload): Json<CreateTenantRequestDto>,
+    payload: Result<Json<CreateTenantRequestDto>, axum::extract::rejection::JsonRejection>,
 ) -> Result<Json<TenantDto>, AppHttpError> {
+    let Json(payload) = payload.map_err(super::generate::generation_json_error)?;
     let principal = require_admin(&state, &headers).await?;
 
     if principal.global_role != "owner" {
@@ -94,8 +96,9 @@ pub async fn list_users(
 pub async fn create_user(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(payload): Json<CreateUserRequestDto>,
+    payload: Result<Json<CreateUserRequestDto>, axum::extract::rejection::JsonRejection>,
 ) -> Result<Json<AdminUserDto>, AppHttpError> {
+    let Json(payload) = payload.map_err(super::generate::generation_json_error)?;
     let principal = require_admin(&state, &headers).await?;
 
     if principal.global_role != "owner" {
@@ -213,8 +216,9 @@ pub async fn save_provider(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(tenant_id): Path<Uuid>,
-    Json(payload): Json<SaveProviderRequestDto>,
+    payload: Result<Json<SaveProviderRequestDto>, axum::extract::rejection::JsonRejection>,
 ) -> Result<Json<ProviderDto>, AppHttpError> {
+    let Json(payload) = payload.map_err(super::generate::generation_json_error)?;
     let principal = require_admin(&state, &headers).await?;
     require_tenant_access(&state, &principal, tenant_id, TenantPermission::Write).await?;
     validate_provider_payload(&payload)?;
@@ -251,8 +255,9 @@ pub async fn save_provider_secret(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path((tenant_id, provider_id)): Path<(Uuid, Uuid)>,
-    Json(payload): Json<SaveProviderSecretRequestDto>,
+    payload: Result<Json<SaveProviderSecretRequestDto>, axum::extract::rejection::JsonRejection>,
 ) -> Result<Json<ProviderDto>, AppHttpError> {
+    let Json(payload) = payload.map_err(super::generate::generation_json_error)?;
     let principal = require_admin(&state, &headers).await?;
     require_tenant_access(&state, &principal, tenant_id, TenantPermission::Write).await?;
     let api_key = required_text(&payload.api_key, "api_key")?;
@@ -300,8 +305,9 @@ pub async fn save_model_route(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(tenant_id): Path<Uuid>,
-    Json(payload): Json<SaveModelRouteRequestDto>,
+    payload: Result<Json<SaveModelRouteRequestDto>, axum::extract::rejection::JsonRejection>,
 ) -> Result<Json<ModelRouteDto>, AppHttpError> {
+    let Json(payload) = payload.map_err(super::generate::generation_json_error)?;
     let principal = require_admin(&state, &headers).await?;
     require_tenant_access(&state, &principal, tenant_id, TenantPermission::Write).await?;
     required_text(&payload.alias, "alias")?;
@@ -315,6 +321,43 @@ pub async fn save_model_route(
         .map_err(map_write_error)?;
 
     Ok(Json(route.into()))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/admin/tenants/{tenant_id}/model-routes/{alias}/readiness",
+    tag = "admin",
+    operation_id = "modelRouteReadiness",
+    summary = "Проверить конфигурацию маршрута модели",
+    description = "Требует admin session token и доступ к tenant. Проверяет конфигурацию и расшифровку credentials локально. Не вызывает LLM, не подтверждает доступность модели или поддержку Tool Calling. Секреты не возвращаются.",
+    params(("tenant_id" = Uuid, Path), ("alias" = String, Path)),
+    security(("admin_session" = [])),
+    responses(
+        (status = 200, description = "Конфигурация: ready, incomplete или unavailable", body = RouteReadinessDto),
+        (status = 404, description = "Alias отсутствует в доступном tenant; model_route=error", body = RouteReadinessDto),
+        (status = 401, description = "Требуется admin session", body = crate::domain::ErrorResponseDto),
+        (status = 403, description = "Нет доступа к tenant", body = crate::domain::ErrorResponseDto),
+        (status = 500, description = "Ошибка хранилища", body = crate::domain::ErrorResponseDto),
+    )
+)]
+pub async fn model_route_readiness(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((tenant_id, alias)): Path<(Uuid, String)>,
+) -> Result<(StatusCode, Json<RouteReadinessDto>), AppHttpError> {
+    let principal = require_admin(&state, &headers).await?;
+    require_tenant_access(&state, &principal, tenant_id, TenantPermission::Read).await?;
+    let result = state.readiness_service.check(tenant_id, &alias).await?;
+    let missing = result
+        .checks
+        .iter()
+        .any(|check| check.code == "model_route" && check.status == ReadinessCheckStatus::Error);
+    let status = if missing {
+        StatusCode::NOT_FOUND
+    } else {
+        StatusCode::OK
+    };
+    Ok((status, Json(result)))
 }
 
 pub async fn list_gateway_clients(
@@ -339,8 +382,9 @@ pub async fn create_gateway_client(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(tenant_id): Path<Uuid>,
-    Json(payload): Json<CreateGatewayClientRequestDto>,
+    payload: Result<Json<CreateGatewayClientRequestDto>, axum::extract::rejection::JsonRejection>,
 ) -> Result<Json<CreatedGatewayClientDto>, AppHttpError> {
+    let Json(payload) = payload.map_err(super::generate::generation_json_error)?;
     let principal = require_admin(&state, &headers).await?;
     require_tenant_access(&state, &principal, tenant_id, TenantPermission::Write).await?;
     let name = required_text(&payload.name, "name")?;

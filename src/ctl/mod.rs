@@ -444,7 +444,7 @@ async fn apply(config_path: &Path) -> Result<()> {
         )));
     }
 
-    let update_source = env.update_source()?;
+    let source_file = env.update_source()?.and_then(|source| source.legacy_file());
     print_section("Применение конфигурации");
     print_info(&format!("Скачиваю image {}", config.image));
     docker.pull_image(&config.image)?;
@@ -460,7 +460,7 @@ async fn apply(config_path: &Path) -> Result<()> {
         "Запускаю контейнер {} на порту {}",
         config.container_name, config.published_port
     ));
-    docker.run_gateway_container(&config, update_source)?;
+    docker.run_gateway_container(&config, source_file)?;
 
     wait_for_healthcheck(&config).await?;
     print_success("Конфигурация применена, healthcheck пройден");

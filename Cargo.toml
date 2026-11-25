@@ -35,6 +35,6 @@ utoipa = { version = "5.5.0", features = ["chrono", "uuid"] }
 utoipa-swagger-ui = { version = "9.0.2", features = ["axum", "vendored"] }
 uuid = { version = "1.23.1", features = ["v4", "serde"] }
 jsonschema = { version = "0.61.1", default-features = false, features = ["arbitrary-precision"] }
-standalone-updater = { git = "https://github.com/averichev/standalone-updater.git", rev = "accc43ab25938bcdad74045737e5f8d8d742faf6", features = ["linux-runtime"] }
+standalone-updater = { git = "https://github.com/averichev/standalone-updater.git", rev = "b43612dd7528185877654428520d57098462f8e7", features = ["linux-runtime"] }
 rust-embed = { version = "8.11", features = ["debug-embed"], optional = true }
 mime_guess = { version = "2", optional = true }

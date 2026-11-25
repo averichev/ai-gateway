@@ -113,7 +113,7 @@ agctl env set GATEWAY_MASTER_KEY '<base64-32-byte-key>'
 
 Проверяет обязательные переменные и не пропускает placeholder-значения вроде `replace-me`.
 
-При заданном `GATEWAY_UPDATE_SOURCE` команды `env validate`, `doctor` и `apply` также проверяют локальный файл издателя. При запуске контейнера `apply` подключает его только для чтения. [Подписанные обновления](standalone-updates.md)
+В `GATEWAY_UPDATE_SOURCE` укажите URL манифеста. Команды `env validate`, `doctor` и `apply` проверяют допустимость адреса до запуска контейнера. `apply` передаёт URL через `.env`. Для существующих конфигураций с абсолютным путём к JSON-файлу сохраняется подключение файла только для чтения. [Подписанные обновления](standalone-updates.md)
 
 ### `agctl image show`
 

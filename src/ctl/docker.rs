@@ -102,7 +102,7 @@ impl DockerClient {
     pub fn run_gateway_container(
         &self,
         config: &CtlConfig,
-        update_source: Option<&Path>,
+        source_file: Option<&Path>,
     ) -> Result<()> {
         let port_mapping = format!("{}:8080", config.published_port);
         let volume_mapping = format!("{}:/var/lib/postgresql/data", config.volume_name);
@@ -121,7 +121,7 @@ impl DockerClient {
             "-v".to_owned(),
             volume_mapping,
         ];
-        if let Some(path) = update_source {
+        if let Some(path) = source_file {
             const DESTINATION: &str = "/etc/ai-gateway/update-source.json";
             // Docker parses --mount as CSV, including absolute paths containing commas.
             let source = path.display().to_string().replace('"', "\"\"");

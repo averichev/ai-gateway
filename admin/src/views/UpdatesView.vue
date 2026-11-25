@@ -135,7 +135,7 @@ onUnmounted(() => { mounted = false; generation++; clearTimeout(timer) })
       </dl>
       <Message v-if="summary.installation_reason" severity="info" :closable="false" class="mb-4">
         {{ summary.installation_reason }}
-        <span v-if="summary.installation_mode === 'disabled'">Укажите GATEWAY_UPDATE_SOURCE в настройках сервера.</span>
+        <span v-if="summary.installation_mode === 'disabled'">Укажите URL манифеста в переменной GATEWAY_UPDATE_SOURCE на сервере.</span>
       </Message>
       <template v-if="summary.installation_mode !== 'disabled'">
         <h5 aria-live="polite">{{ startingInstall ? 'Запуск установки' : phase }}</h5>

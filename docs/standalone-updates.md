@@ -8,30 +8,47 @@
 | Отдельная Linux-служба под systemd | `supervisor` | Исходный процесс сохраняет PID и запускает рабочую копию из приватного каталога. |
 | Linux-процесс с исполняемым файлом, которым владеет пользователь службы | `standalone` | Updater заменяет файл и запускает процесс с новым PID. Бинарник и каталог обновлений должны находиться на одной файловой системе. |
 
-## Подключение издателя
+## Подключение канала
 
-UUID продукта AI Gateway — `cf9f6111-304c-40e4-8c78-6c84e600dd9e`. Используйте его при регистрации продукта у издателя и в подписанном поле `application_id`.
+Укажите полный URL манифеста в окружении шлюза или в рабочем `.env` для `agctl apply`. UUID продукта и публичный ключ для проверки подписи уже встроены в AI Gateway.
 
-Создайте доверенный файл, например `/etc/ai-gateway/update-source.json`. Подставьте адреса своего канала и значение `x` из публичного Ed25519 JWK издателя. Закрытый ключ хранится у издателя.
+```dotenv
+GATEWAY_UPDATE_SOURCE=https://updates.example.org/ai-gateway/manifest.json
+```
+
+При проверке шлюз делает один GET к манифесту и ищет более новую стабильную версию для своей платформы. Публикуйте бинарники на том же HTTPS-origin, что и манифест (схема, хост и порт), включая адрес после перенаправлений. Лимит одного бинарника — 256 МиБ. Для локальной проверки допустим HTTP на loopback IP.
+
+Если уже используется абсолютный путь к `update-source.json`, он продолжит работать со своим ключом и правилами загрузки. Для перехода сначала опубликуйте манифест с подписями AI Gateway, затем замените путь на URL.
+
+## Подпись выпуска
+
+Постоянный UUID AI Gateway — `cf9f6111-304c-40e4-8c78-6c84e600dd9e`. Для регистрации у издателя используйте этот UUID и публичный ключ приложения. [Публичный Ed25519 JWK](../src/updates/public-key.json)
+
+Приватный ключ хранится на машине подписания. Скрипт читает его из `${XDG_CONFIG_HOME:-$HOME/.config}/ai-gateway/release-signing/ed25519.pem` или по пути в `GATEWAY_UPDATE_SIGNING_KEY`.
+
+Для следующего выпуска увеличьте стабильную версию в `Cargo.toml`, обновите `Cargo.lock` и выполните `make standalone-release`. На Linux нужной архитектуры получите BuildInfo из окончательного бинарника. Передайте этот же файл и его BuildInfo на машину подписания.
+
+```sh
+target/release/ai-gateway --standalone-updater-build-info > build-info.json
+node scripts/sign-update.mjs target/release/ai-gateway build-info.json > signed_metadata.jws
+```
+
+Скрипт подписывает UUID, версию, ОС, архитектуру, размер и SHA-256 файла. Поместите строку из `signed_metadata.jws` в поле `signed_metadata` соответствующего бинарника в манифесте схемы 2. Для каждой архитектуры нужна собственная подпись. Сначала разместите бинарник, затем опубликуйте манифест. [Контракт издателя](https://github.com/averichev/standalone-updater/blob/b43612dd7528185877654428520d57098462f8e7/docs/integration.md)
 
 ```json
 {
-  "product_id": "cf9f6111-304c-40e4-8c78-6c84e600dd9e",
-  "manifest_url": "https://updates.example.org/ai-gateway/manifest.json",
-  "descriptor_url": "https://updates.example.org/ai-gateway/standalone/{target}",
-  "public_key": {"kty": "OKP", "crv": "Ed25519", "x": "<публичный ключ в base64url без padding>"},
-  "allowed_download_origins": ["https://downloads.example.org"],
-  "max_artifact_bytes": 268435456
+  "schema_version": 2,
+  "releases": [{
+    "version": "0.1.1",
+    "artifacts": [{
+      "purpose": "executable",
+      "target": "linux-aarch64",
+      "download_url": "https://updates.example.org/ai-gateway/0.1.1/ai-gateway-linux-aarch64",
+      "signed_metadata": "<строка из signed_metadata.jws>"
+    }]
+  }]
 }
 ```
-
-Укажите абсолютный путь к файлу в окружении шлюза. В Docker-деплое через `agctl` это путь на VPS в рабочем `.env`. При следующем `agctl apply` утилита проверит конфигурацию до остановки контейнера и подключит файл только для чтения. При ручном `docker run` подключите файл через `--mount type=bind,src=/etc/ai-gateway/update-source.json,dst=/etc/ai-gateway/update-source.json,readonly`.
-
-```dotenv
-GATEWAY_UPDATE_SOURCE=/etc/ai-gateway/update-source.json
-```
-
-Для выпуска увеличьте стабильную SemVer-версию в `Cargo.toml` и обновите `Cargo.lock`. Издатель публикует исполняемый файл для целевого ABI и подписывает его окончательные размер и SHA-256 по протоколу standalone v1. Клиент подставляет, например, `linux-aarch64` в `{target}` и сам добавляет `current_version`. Описание wire-формата и контракта издателя есть в [документации библиотеки](https://github.com/averichev/standalone-updater/blob/accc43ab25938bcdad74045737e5f8d8d742faf6/docs/integration.md).
 
 ## Отдельная Linux-служба
 
@@ -42,7 +59,7 @@ make standalone-release
 target/release/ai-gateway --standalone-updater-build-info
 ```
 
-Установите этот файл обычным способом. Сохраните рабочие `DATABASE_URL` и `GATEWAY_MASTER_KEY` в окружении службы. Задайте режим и приватный каталог, принадлежащий пользователю службы с правами `0700`. Путь должен допускать запуск файлов и проходить через каталоги без симлинков и без права записи для посторонних.
+Установите бинарник и системные корневые сертификаты (в Debian и Ubuntu это пакет `ca-certificates`). Сохраните рабочие `DATABASE_URL` и `GATEWAY_MASTER_KEY` в окружении службы. Задайте режим и приватный каталог, принадлежащий пользователю службы с правами `0700`. Путь должен допускать запуск файлов и проходить через каталоги без симлинков и без права записи для посторонних.
 
 ```dotenv
 GATEWAY_UPDATE_MODE=supervisor

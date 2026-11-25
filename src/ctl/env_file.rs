@@ -1,6 +1,7 @@
-use std::{collections::BTreeMap, fs, path::Path};
+use std::{collections::BTreeMap, ffi::OsStr, fs, path::Path};
 
 use super::{CtlError, Result};
+use crate::updates::UpdateLocation;
 
 pub const REQUIRED_ENV_KEYS: &[&str] = &[
     "APP_HOST",
@@ -55,23 +56,24 @@ impl EnvFile {
         self.values.get(key).map(String::as_str)
     }
 
-    pub(super) fn update_source(&self) -> Result<Option<&Path>> {
-        let Some(path) = self
-            .get("GATEWAY_UPDATE_SOURCE")
-            .filter(|s| !s.is_empty())
-            .map(Path::new)
-        else {
+    pub(super) fn update_source(&self) -> Result<Option<UpdateLocation<'_>>> {
+        let Some(value) = self.get("GATEWAY_UPDATE_SOURCE").filter(|s| !s.is_empty()) else {
             return Ok(None);
         };
-        if !path.is_absolute() {
+        let location = UpdateLocation::new(OsStr::new(value));
+        if location
+            .legacy_file()
+            .is_some_and(|path| !path.is_absolute())
+        {
             return Err(CtlError::Validation(
-                "GATEWAY_UPDATE_SOURCE требует абсолютного пути на VPS".into(),
+                "GATEWAY_UPDATE_SOURCE требует URL манифеста или абсолютного пути к файлу на VPS"
+                    .into(),
             ));
         }
-        crate::updates::external_monitor(path).map_err(|e| {
+        location.monitor().map_err(|e| {
             CtlError::Validation(format!("Некорректный GATEWAY_UPDATE_SOURCE: {e}"))
         })?;
-        Ok(Some(path))
+        Ok(Some(location))
     }
 
     pub fn set(&mut self, key: impl Into<String>, value: impl Into<String>) {
@@ -169,6 +171,14 @@ pub enum EnvValueStatus {
 }
 
 pub fn redact_value(key: &str, value: &str) -> String {
+    if key == "GATEWAY_UPDATE_SOURCE"
+        && let UpdateLocation::Manifest(url) = UpdateLocation::new(OsStr::new(value))
+    {
+        // A manifest URL can include a private channel token in its path or query.
+        return reqwest::Url::parse(url)
+            .map(|url| url.origin().ascii_serialization())
+            .unwrap_or_else(|_| "******".to_owned());
+    }
     if is_secret_key(key) {
         let length = value.chars().count();
 
@@ -211,3 +221,33 @@ fn is_placeholder_value(value: &str) -> bool {
 }
 
 const TEMPLATE_ENV: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/.env.example"));
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn manifest_url_passes_validation_without_a_docker_mount() {
+        let mut env = EnvFile::default();
+        assert!(env.update_source().unwrap().is_none());
+        env.set(
+            "GATEWAY_UPDATE_SOURCE",
+            "https://updates.example.org/manifest.json?token=test",
+        );
+        assert!(
+            env.update_source()
+                .unwrap()
+                .unwrap()
+                .legacy_file()
+                .is_none()
+        );
+        assert_eq!(env.safe_rows()[0].1, "https://updates.example.org");
+        env.set(
+            "GATEWAY_UPDATE_SOURCE",
+            "http://updates.example.org/manifest.json",
+        );
+        assert!(env.update_source().is_err());
+        env.set("GATEWAY_UPDATE_SOURCE", "relative/source.json");
+        assert!(env.update_source().is_err());
+    }
+}

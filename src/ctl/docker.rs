@@ -1,5 +1,6 @@
 use std::{
     ffi::OsStr,
+    path::Path,
     process::{Command, Stdio},
 };
 
@@ -98,11 +99,15 @@ impl DockerClient {
         }
     }
 
-    pub fn run_gateway_container(&self, config: &CtlConfig) -> Result<()> {
+    pub fn run_gateway_container(
+        &self,
+        config: &CtlConfig,
+        update_source: Option<&Path>,
+    ) -> Result<()> {
         let port_mapping = format!("{}:8080", config.published_port);
         let volume_mapping = format!("{}:/var/lib/postgresql/data", config.volume_name);
 
-        let args = vec![
+        let mut args = vec![
             "run".to_owned(),
             "-d".to_owned(),
             "--name".to_owned(),
@@ -115,8 +120,19 @@ impl DockerClient {
             port_mapping,
             "-v".to_owned(),
             volume_mapping,
-            config.image.clone(),
         ];
+        if let Some(path) = update_source {
+            const DESTINATION: &str = "/etc/ai-gateway/update-source.json";
+            // Docker parses --mount as CSV, including absolute paths containing commas.
+            let source = path.display().to_string().replace('"', "\"\"");
+            args.extend([
+                "--mount".into(),
+                format!("type=bind,\"source={source}\",target={DESTINATION},readonly"),
+                "-e".into(),
+                format!("GATEWAY_UPDATE_SOURCE={DESTINATION}"),
+            ]);
+        }
+        args.push(config.image.clone());
 
         let _ = run_command_owned("docker", args)?;
         Ok(())

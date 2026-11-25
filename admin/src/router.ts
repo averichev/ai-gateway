@@ -65,6 +65,11 @@ const router = createRouter({
       name: 'users',
       component: UsersView,
     },
+    {
+      path: '/updates',
+      component: () => import('./views/UpdatesView.vue'),
+      meta: { ownerOnly: true },
+    },
   ],
 })
 
@@ -78,6 +83,10 @@ router.beforeEach(async (to) => {
 
   if (!auth.isAuthenticated.value) {
     return { path: '/login', query: { redirect: to.fullPath } }
+  }
+
+  if (to.meta.ownerOnly && auth.user.value?.global_role !== 'owner') {
+    return { path: '/requests' }
   }
 
   return true

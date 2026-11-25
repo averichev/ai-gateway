@@ -187,6 +187,7 @@ fn env_validate(config_path: &Path) -> Result<()> {
     let placeholders = env.placeholder_required_keys();
 
     if missing.is_empty() && placeholders.is_empty() {
+        env.update_source()?;
         print_success("Env-файл выглядит корректно");
         Ok(())
     } else {
@@ -331,6 +332,19 @@ async fn doctor(config_path: &Path) -> Result<()> {
             ));
 
             let env = EnvFile::load(&config.env_file)?;
+            match env.update_source() {
+                Ok(Some(_)) => rows.push((
+                    "Источник обновлений".into(),
+                    CheckState::Ok,
+                    "Параметры издателя проверены".into(),
+                )),
+                Err(error) => rows.push((
+                    "Источник обновлений".into(),
+                    CheckState::Fail,
+                    error.to_string(),
+                )),
+                Ok(None) => {}
+            }
             let missing = env.missing_required_keys();
             let placeholders = env.placeholder_required_keys();
             if missing.is_empty() && placeholders.is_empty() {
@@ -430,6 +444,7 @@ async fn apply(config_path: &Path) -> Result<()> {
         )));
     }
 
+    let update_source = env.update_source()?;
     print_section("Применение конфигурации");
     print_info(&format!("Скачиваю image {}", config.image));
     docker.pull_image(&config.image)?;
@@ -445,7 +460,7 @@ async fn apply(config_path: &Path) -> Result<()> {
         "Запускаю контейнер {} на порту {}",
         config.container_name, config.published_port
     ));
-    docker.run_gateway_container(&config)?;
+    docker.run_gateway_container(&config, update_source)?;
 
     wait_for_healthcheck(&config).await?;
     print_success("Конфигурация применена, healthcheck пройден");

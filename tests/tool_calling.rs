@@ -45,7 +45,12 @@ async fn serve(app: Router) -> Server {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let task = tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await
+        .unwrap();
     });
     Server { url, task }
 }
@@ -187,6 +192,7 @@ impl Harness {
             requests_repo: requests,
             secret_crypto: crypto,
             admin_dist_dir: "/nonexistent-ai-gateway-test-ui".into(),
+            updates: Default::default(),
         }))
         .await;
         Self {
@@ -255,6 +261,156 @@ fn call(id: &str, city: &str) -> Value {
 }
 fn completion(content: Value, calls: Vec<Value>, reason: &str) -> Value {
     json!({"choices":[{"message":{"content":content,"tool_calls":calls},"finish_reason":reason}],"usage":{"prompt_tokens":17,"completion_tokens":9}})
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn update_preflight_reads_build_identity_before_configuration() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_ai-gateway"))
+        .env_clear()
+        .env("APP_PORT", "invalid")
+        .arg(standalone_updater::runtime::BUILD_INFO_ARGUMENT)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let build: standalone_updater::runtime::BuildInfo =
+        serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(build.version, env!("CARGO_PKG_VERSION"));
+    assert_eq!(build.product_id, ai_gateway::updates::PRODUCT_ID);
+    assert_eq!(build.rust_target, env!("GATEWAY_BUILD_TARGET"));
+    assert_eq!(build.self_update_protocol, 1);
+    assert_eq!(hex::decode(build.data_compatibility).unwrap().len(), 32);
+}
+
+#[sqlx::test]
+async fn update_operations_require_a_global_owner_even_when_disabled(pool: PgPool) {
+    let h = Harness::new(pool).await;
+    let auth = PostgresAuthRepository::new(h.pool.clone());
+    let tenant_admin = auth
+        .create_user(
+            "tenant-admin@test",
+            "unused",
+            Some(h.tenants[0]),
+            Some("tenant_admin"),
+        )
+        .await
+        .unwrap();
+    auth.create_session(
+        tenant_admin.id,
+        &token_hash("tenant-session"),
+        chrono::Utc::now() + chrono::Duration::hours(1),
+    )
+    .await
+    .unwrap();
+    let client = Client::new();
+    let url = format!("{}/api/admin/updates", h.gateway.url);
+    let response = client
+        .get(&url)
+        .bearer_auth("admin-session")
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    assert_eq!(response.headers()["cache-control"], "no-store");
+    let summary: Value = response.json().await.unwrap();
+    assert_eq!(summary["installation_mode"], "disabled");
+    assert_eq!(summary["installation_supported"], false);
+    assert_eq!(summary["current_version"], env!("CARGO_PKG_VERSION"));
+
+    for (path, payload) in [
+        ("", None),
+        ("/check", Some(json!({}))),
+        (
+            "/prepare",
+            Some(json!({"check_id":"previous","version":"9.0.0"})),
+        ),
+        ("/install", Some(json!({"operation_id":"previous"}))),
+        ("/cancel", Some(json!({"operation_id":"previous"}))),
+    ] {
+        let route = format!("{url}{path}");
+        let request = || match &payload {
+            None => client.get(&route),
+            Some(data) => client.post(&route).json(data),
+        };
+        assert_eq!(
+            request().send().await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            request()
+                .bearer_auth("client-a")
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            request()
+                .bearer_auth("tenant-session")
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        if payload.is_some() {
+            assert_eq!(
+                request()
+                    .bearer_auth("admin-session")
+                    .send()
+                    .await
+                    .unwrap()
+                    .status(),
+                StatusCode::CONFLICT
+            );
+        }
+    }
+    assert_eq!(
+        client
+            .post(format!("{url}/check"))
+            .bearer_auth("admin-session")
+            .header("sec-fetch-site", "cross-site")
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+}
+
+#[sqlx::test]
+async fn update_readiness_depends_on_postgres_and_health_stays_shallow(pool: PgPool) {
+    let h = Harness::new(pool).await;
+    let client = Client::new();
+    let ready = format!("{}/ready", h.gateway.url);
+    let body: Value = client
+        .get(&ready)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(body["status"], "ok");
+    assert_eq!(body["version"], env!("CARGO_PKG_VERSION"));
+    h.pool.close().await;
+    assert_eq!(
+        client.get(&ready).send().await.unwrap().status(),
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    assert_eq!(
+        client
+            .get(format!("{}/health", h.gateway.url))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
 }
 
 #[sqlx::test]

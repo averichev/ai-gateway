@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed } from 'vue'
 
+import { useAuth } from '../auth'
 import AppMenuItem from './AppMenuItem.vue'
 import type { MenuSection } from './menu'
 
-const model = ref<MenuSection[]>([
+const { user } = useAuth()
+const model = computed<MenuSection[]>(() => [
   {
     label: 'Шлюз',
     items: [
@@ -47,6 +49,12 @@ const model = ref<MenuSection[]>([
         label: 'Пользователи',
         icon: 'pi pi-fw pi-users',
         to: '/users',
+      },
+      {
+        label: 'Обновления',
+        icon: 'pi pi-fw pi-download',
+        to: '/updates',
+        visible: user.value?.global_role === 'owner',
       },
     ],
   },

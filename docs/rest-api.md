@@ -193,6 +193,8 @@ Gateway возвращает понятную внутреннюю ошибку:
 
 ## Admin API
 
+Глобальному владельцу доступны статус и управление подписанными обновлениями под `/api/admin/updates`. [Маршруты и состояния установки](standalone-updates.md#http-api-владельца)
+
 ### Auth
 
 - `GET /api/auth/bootstrap` - возвращает `{ "has_users": boolean }`.

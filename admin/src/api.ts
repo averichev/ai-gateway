@@ -182,6 +182,48 @@ export function readAuthToken(): string | null {
   return localStorage.getItem(AUTH_TOKEN_KEY)
 }
 
+export type UpdateStage = 'idle' | 'checking' | 'available' | 'downloading' | 'verifying' |
+  'prepared' | 'stopping' | 'switching' | 'starting' | 'health_check' | 'completed' |
+  'rolling_back' | 'rolled_back' | 'failed'
+
+export interface UpdateSummary {
+  current_version: string
+  target: string
+  installation_mode: 'disabled' | 'external' | 'supervisor' | 'standalone'
+  installation_supported: boolean
+  installation_reason: string | null
+  status: {
+    operation_id: string | null
+    state: UpdateStage
+    check_outcome: string
+    available: { version: string; notes: string } | null
+    downloaded_bytes: number
+    total_bytes: number | null
+    message: string
+    recovery_required: boolean
+  }
+}
+
+export async function fetchUpdateSummary(): Promise<UpdateSummary> {
+  return (await adminApi.get<UpdateSummary>('/updates')).data
+}
+
+export function checkUpdate() {
+  return adminApi.post('/updates/check')
+}
+
+export function prepareUpdate(check_id: string, version: string) {
+  return adminApi.post('/updates/prepare', { check_id, version })
+}
+
+export function installUpdate(operation_id: string) {
+  return adminApi.post('/updates/install', { operation_id })
+}
+
+export function cancelUpdate(operation_id: string) {
+  return adminApi.post('/updates/cancel', { operation_id })
+}
+
 export async function fetchBootstrapStatus(): Promise<BootstrapStatus> {
   const { data } = await authApi.get<BootstrapStatus>('/bootstrap')
   return data

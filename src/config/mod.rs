@@ -1,4 +1,4 @@
-use std::{env, num::ParseIntError};
+use std::{env, net::SocketAddr, num::ParseIntError};
 
 use thiserror::Error;
 
@@ -22,6 +22,8 @@ pub struct AppConfig {
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
+    #[error("invalid APP_HOST or APP_PORT")]
+    InvalidListenAddress,
     #[error("missing required environment variable `{0}`")]
     Missing(String),
     #[error("environment variable `{0}` must be true or false")]
@@ -36,9 +38,10 @@ pub enum ConfigError {
 
 impl AppConfig {
     pub fn from_env() -> Result<Self, ConfigError> {
+        let (server_host, server_port) = listen_settings()?;
         Ok(Self {
-            server_host: optional("APP_HOST", "0.0.0.0"),
-            server_port: optional_parse("APP_PORT", 8080)?,
+            server_host,
+            server_port,
             database_url: required("DATABASE_URL")?,
             gateway_master_key: required("GATEWAY_MASTER_KEY")?,
             default_provider_code: optional("DEFAULT_PROVIDER_CODE", "openai"),
@@ -58,6 +61,20 @@ impl AppConfig {
             admin_dist_dir: optional("ADMIN_DIST_DIR", "admin/dist"),
         })
     }
+}
+
+fn listen_settings() -> Result<(String, u16), ConfigError> {
+    Ok((
+        optional("APP_HOST", "0.0.0.0"),
+        optional_parse("APP_PORT", 8080)?,
+    ))
+}
+
+pub(crate) fn listen_address() -> Result<SocketAddr, ConfigError> {
+    let (host, port) = listen_settings()?;
+    format!("{host}:{port}")
+        .parse()
+        .map_err(|_| ConfigError::InvalidListenAddress)
 }
 
 fn parse_store_content_previews(value: Option<&str>) -> Result<bool, ConfigError> {

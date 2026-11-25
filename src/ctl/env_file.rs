@@ -55,6 +55,25 @@ impl EnvFile {
         self.values.get(key).map(String::as_str)
     }
 
+    pub(super) fn update_source(&self) -> Result<Option<&Path>> {
+        let Some(path) = self
+            .get("GATEWAY_UPDATE_SOURCE")
+            .filter(|s| !s.is_empty())
+            .map(Path::new)
+        else {
+            return Ok(None);
+        };
+        if !path.is_absolute() {
+            return Err(CtlError::Validation(
+                "GATEWAY_UPDATE_SOURCE требует абсолютного пути на VPS".into(),
+            ));
+        }
+        crate::updates::external_monitor(path).map_err(|e| {
+            CtlError::Validation(format!("Некорректный GATEWAY_UPDATE_SOURCE: {e}"))
+        })?;
+        Ok(Some(path))
+    }
+
     pub fn set(&mut self, key: impl Into<String>, value: impl Into<String>) {
         self.values.insert(key.into(), value.into());
     }

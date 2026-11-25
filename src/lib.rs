@@ -8,4 +8,5 @@ pub mod providers;
 pub mod repositories;
 pub mod security;
 pub mod server;
+pub mod updates;
 pub mod usecases;

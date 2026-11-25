@@ -12,7 +12,7 @@ DOCKER_RUN_FLAGS ?=
 PREFIX ?= /usr/local
 BIN_DIR ?= $(PREFIX)/bin
 
-.PHONY: help run restart ensure-env docker-check docker-build docker-run docker-stop docker-logs docker-shell docker-tag docker-push docker-release ctl-build ctl-release ctl-install
+.PHONY: help run restart ensure-env docker-check docker-build docker-run docker-stop docker-logs docker-shell docker-tag docker-push docker-release ctl-build ctl-release ctl-install standalone-release
 
 help:
 	@echo "Available targets:"
@@ -29,6 +29,7 @@ help:
 	@echo "  make ctl-build"
 	@echo "  make ctl-release"
 	@echo "  make ctl-install   PREFIX=/usr/local"
+	@echo "  make standalone-release  Build the server with the admin UI embedded"
 
 run restart: IMAGE := $(APP_NAME)
 run restart: ensure-env docker-build docker-stop docker-run
@@ -81,6 +82,10 @@ docker-release: docker-build docker-push
 
 ctl-build:
 	cargo build --bin agctl
+
+standalone-release:
+	cd admin && npm ci && npm run build
+	cargo build --locked --release --features embedded-admin --bin ai-gateway
 
 ctl-release:
 	cargo build --release --bin agctl

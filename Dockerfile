@@ -7,11 +7,11 @@ RUN npm run build
 
 FROM rust:1.91-bookworm AS backend-build
 WORKDIR /app
-COPY Cargo.toml Cargo.lock ./
+COPY Cargo.toml Cargo.lock build.rs ./
 COPY .env.example ./
 COPY src ./src
 COPY migrations ./migrations
-RUN cargo build --release
+RUN cargo build --locked --release
 
 FROM postgres:17-bookworm AS runtime
 RUN apt-get update \

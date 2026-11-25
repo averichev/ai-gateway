@@ -1,23 +1,26 @@
-use std::{path::Path, sync::Arc};
+use std::sync::Arc;
+#[cfg(not(feature = "embedded-admin"))]
+use {
+    axum::routing::get_service,
+    std::path::Path,
+    tower_http::services::{ServeDir, ServeFile},
+};
 
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, MatchedPath},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::{get, get_service, post},
+    routing::{get, post},
 };
-use tower_http::{
-    services::{ServeDir, ServeFile},
-    trace::TraceLayer,
-};
+use tower_http::trace::TraceLayer;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 use uuid::Uuid;
 
 use crate::{
     domain::{ErrorBodyDto, ErrorResponseDto, HealthResponseDto},
-    http::{admin, auth, generate},
+    http::{admin, auth, generate, updates},
     openapi::ApiDoc,
     repositories::{
         PostgresAuthRepository, PostgresRequestsRepository, PostgresRoutesRepository,
@@ -41,13 +44,17 @@ pub struct AppState {
     pub requests_repo: Arc<PostgresRequestsRepository>,
     pub secret_crypto: SecretCrypto,
     pub admin_dist_dir: String,
+    pub updates: crate::updates::Updates,
 }
 
 pub fn build_app(state: AppState) -> Router {
+    #[cfg(not(feature = "embedded-admin"))]
     let admin_dist_dir = state.admin_dist_dir.clone();
 
     let router = Router::new()
         .route("/health", get(healthcheck))
+        .route("/ready", get(updates::readiness))
+        .merge(updates::routes(state.clone()))
         .route("/api/auth/bootstrap", get(auth::bootstrap_status))
         .route("/api/auth/register", post(auth::bootstrap_register))
         .route("/api/auth/login", post(auth::login))
@@ -112,6 +119,10 @@ pub fn build_app(state: AppState) -> Router {
         .layer(TraceLayer::new_for_http().make_span_with(safe_http_span))
         .with_state(state);
 
+    #[cfg(feature = "embedded-admin")]
+    return router.fallback(get(crate::http::assets::serve));
+
+    #[cfg(not(feature = "embedded-admin"))]
     if Path::new(&admin_dist_dir).exists() {
         router.fallback_service(get_service(
             ServeDir::new(&admin_dist_dir)

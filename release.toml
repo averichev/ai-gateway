@@ -1,0 +1,10 @@
+[rust]
+binary = "ai-gateway"
+features = ["embedded-admin"]
+
+[frontend]
+path = "admin"
+
+[signing]
+private_key_env = "GATEWAY_UPDATE_SIGNING_KEY"
+private_key_file = "~/.config/ai-gateway/release-signing/ed25519.pem"

@@ -16,7 +16,7 @@ use crate::{
         PostgresAuthRepository, PostgresRequestsRepository, PostgresRoutesRepository, seed_defaults,
     },
     security::SecretCrypto,
-    updates::Updates,
+    updates::{Updates, VERSION},
     usecases::{
         generate::{ContentPreviewPolicy, GenerateService},
         readiness::ReadinessService,
@@ -26,6 +26,10 @@ use crate::{
 pub(crate) static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    if std::env::args_os().skip(1).eq(["--version"]) {
+        println!("ai-gateway {VERSION}");
+        return Ok(());
+    }
     #[cfg(target_os = "linux")]
     if crate::updates::linux::build_info().handle_cli()? {
         return Ok(());

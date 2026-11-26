@@ -1,4 +1,5 @@
 target
+releases
 admin/node_modules
 admin/dist
 .env

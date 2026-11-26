@@ -22,11 +22,13 @@ GATEWAY_UPDATE_SOURCE=https://app.releases.veruna.systems/ai-gateway/manifest.js
 
 ## Подпись выпуска
 
-Постоянный UUID AI Gateway — `cf9f6111-304c-40e4-8c78-6c84e600dd9e`. Для регистрации у издателя используйте этот UUID и публичный ключ приложения. [Публичный Ed25519 JWK](../src/updates/public-key.json)
+Постоянный UUID AI Gateway и публичный ключ Ed25519 для регистрации у издателя хранятся в [release.config.json](../release.config.json). Шлюз встраивает их при компиляции. Упаковщик и скрипт подписи читают тот же файл.
 
-Приватный ключ хранится на машине подписания. Скрипт читает его из `${XDG_CONFIG_HOME:-$HOME/.config}/ai-gateway/release-signing/ed25519.pem` или по пути в `GATEWAY_UPDATE_SIGNING_KEY`.
+На машине подписания поместите приватный ключ в `~/.config/ai-gateway/release-signing/ed25519.pem` или укажите путь в `GATEWAY_UPDATE_SIGNING_KEY`. Скрипт ручной подписи также учитывает `XDG_CONFIG_HOME`. Если этот каталог отличается от `~/.config`, задайте `GATEWAY_UPDATE_SIGNING_KEY` и для упаковщика.
 
-Для следующего выпуска увеличьте стабильную версию в `Cargo.toml`, обновите `Cargo.lock` и выполните `make standalone-release`. На Linux нужной архитектуры получите BuildInfo из окончательного бинарника. Передайте этот же файл и его BuildInfo на машину подписания.
+Для сборки через VerunaPack зафиксируйте изменения в Git и запустите `veruna-pack build` из репозитория. Упаковщик вычислит версию по коммитам и тегам, соберёт `ai-gateway` со встроенной админкой и сохранит подписанный комплект в `releases/<версия>/`. Готовый бинарник выводит версию по флагу `--version`.
+
+Для ручной сборки отдельного Linux-бинарника увеличьте стабильную версию в `Cargo.toml`, обновите `Cargo.lock` и выполните `make standalone-release`. На Linux нужной архитектуры получите BuildInfo из окончательного бинарника. Передайте этот же файл и его BuildInfo на машину подписания.
 
 ```sh
 target/release/ai-gateway --standalone-updater-build-info > build-info.json

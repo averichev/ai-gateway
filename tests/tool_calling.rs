@@ -263,6 +263,21 @@ fn completion(content: Value, calls: Vec<Value>, reason: &str) -> Value {
     json!({"choices":[{"message":{"content":content,"tool_calls":calls},"finish_reason":reason}],"usage":{"prompt_tokens":17,"completion_tokens":9}})
 }
 
+#[test]
+fn version_flag_works_before_server_configuration() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_ai-gateway"))
+        .env_clear()
+        .env("APP_PORT", "invalid")
+        .arg("--version")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap().trim(),
+        format!("ai-gateway {}", ai_gateway::updates::VERSION)
+    );
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn update_preflight_reads_build_identity_before_configuration() {
@@ -275,7 +290,7 @@ fn update_preflight_reads_build_identity_before_configuration() {
     assert!(output.status.success());
     let build: standalone_updater::runtime::BuildInfo =
         serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(build.version, env!("CARGO_PKG_VERSION"));
+    assert_eq!(build.version, ai_gateway::updates::VERSION);
     assert_eq!(build.product_id, ai_gateway::updates::PRODUCT_ID);
     assert_eq!(build.rust_target, env!("GATEWAY_BUILD_TARGET"));
     assert_eq!(build.self_update_protocol, 1);
@@ -316,7 +331,7 @@ async fn update_operations_require_a_global_owner_even_when_disabled(pool: PgPoo
     let summary: Value = response.json().await.unwrap();
     assert_eq!(summary["installation_mode"], "disabled");
     assert_eq!(summary["installation_supported"], false);
-    assert_eq!(summary["current_version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(summary["current_version"], ai_gateway::updates::VERSION);
 
     for (path, payload) in [
         ("", None),
@@ -396,7 +411,7 @@ async fn update_readiness_depends_on_postgres_and_health_stays_shallow(pool: PgP
         .await
         .unwrap();
     assert_eq!(body["status"], "ok");
-    assert_eq!(body["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(body["version"], ai_gateway::updates::VERSION);
     h.pool.close().await;
     assert_eq!(
         client.get(&ready).send().await.unwrap().status(),

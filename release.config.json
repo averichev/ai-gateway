@@ -1,0 +1,10 @@
+{
+  "product_id": "cf9f6111-304c-40e4-8c78-6c84e600dd9e",
+  "updates": {
+    "public_key": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "4yXVYhfTB1peZiXWl-qss8q6x95dluoxIl0amkHOQII"
+    }
+  }
+}

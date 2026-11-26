@@ -4,11 +4,10 @@ import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-const identityDir = new URL('../src/updates/', import.meta.url);
-
 async function signRelease(binary, buildInfoPath) {
-  const productId = (await readFile(new URL('product-id.txt', identityDir), 'utf8')).trim();
-  const jwk = JSON.parse(await readFile(new URL('public-key.json', identityDir), 'utf8'));
+  const identity = JSON.parse(await readFile(new URL('../release.config.json', import.meta.url), 'utf8'));
+  const productId = identity.product_id;
+  const jwk = identity.updates.public_key;
   const build = JSON.parse(await readFile(buildInfoPath, 'utf8'));
   if (build.product_id !== productId || build.self_update_protocol !== 1) {
     throw new Error('BuildInfo должен принадлежать AI Gateway и использовать протокол v1');

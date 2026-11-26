@@ -6,8 +6,11 @@ use standalone_updater::{OperationStatus, UpdateError, UpdateMonitor, UpdateSour
 #[cfg(target_os = "linux")]
 pub(crate) mod linux;
 
-pub const PRODUCT_ID: &str = include_str!("updates/product-id.txt").trim_ascii_end();
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const PRODUCT_ID: &str = env!("GATEWAY_PRODUCT_ID");
+pub const VERSION: &str = match option_env!("AI_GATEWAY_RELEASE_VERSION") {
+    Some(version) => version,
+    None => env!("CARGO_PKG_VERSION"),
+};
 const MAX_ARTIFACT_BYTES: u64 = 256 * 1024 * 1024;
 
 #[derive(Clone, Default)]
@@ -71,7 +74,7 @@ impl<'a> UpdateLocation<'a> {
                     .map_err(|_| UpdateError::Trust("некорректный URL манифеста"))?
                     .origin()
                     .ascii_serialization();
-                let public_key = serde_json::from_str(include_str!("updates/public-key.json"))
+                let public_key = serde_json::from_str(env!("GATEWAY_UPDATE_PUBLIC_KEY"))
                     .expect("AI Gateway embeds a public Ed25519 JWK");
                 Ok(UpdateSource::from_manifest(
                     url,

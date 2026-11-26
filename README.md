@@ -197,7 +197,7 @@ http://localhost:8080/
 Основные env-переменные:
 
 - `APP_HOST`
-- `APP_PORT`
+- `PORT` — HTTP-порт шлюза. При отсутствии `PORT` используется `APP_PORT`, затем значение по умолчанию `8080`.
 - `DATABASE_URL`
 - `GATEWAY_MASTER_KEY` - base64-encoded 32-byte key для AES-256-GCM provider secrets
 - `DEFAULT_PROVIDER_CODE`
@@ -215,24 +215,26 @@ http://localhost:8080/
 
 ## Запуск
 
-Через Makefile:
+Для запуска из исходников на порту `9090` задайте `PORT` в окружении процесса или в корневом `.env`.
+
+```bash
+PORT=9090 cargo run --bin ai-gateway
+```
+
+Для запуска в Docker укажите `PORT=9090` в `.env` и выполните команду ниже. Makefile опубликует тот же порт на хосте. Если нужен другой внешний порт, задайте его при запуске командой `make run PORT=3000`.
 
 ```bash
 make run
 ```
 
-Или вручную:
+Для ручного запуска Docker задайте порт сервера и пробросьте его на хост.
 
 ```bash
 docker build -t ai-gateway .
-docker run --rm -p 8080:8080 --env-file .env ai-gateway
+docker run --rm --env-file .env -e PORT=9090 -p 9090:9090 ai-gateway
 ```
 
-После запуска:
-
-- API: `http://localhost:8080`
-- Admin UI: `http://localhost:8080/`
-- Swagger UI: `http://localhost:8080/swagger-ui/`
+При внешнем порте `9090` API и админка доступны на `http://localhost:9090/`, а Swagger UI — на `http://localhost:9090/swagger-ui/`.
 
 ## Хранилище и маршрутизация
 

@@ -22,7 +22,7 @@ pub struct AppConfig {
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
-    #[error("invalid APP_HOST or APP_PORT")]
+    #[error("invalid IP address in environment variable `APP_HOST`")]
     InvalidListenAddress,
     #[error("missing required environment variable `{0}`")]
     Missing(String),
@@ -66,8 +66,22 @@ impl AppConfig {
 fn listen_settings() -> Result<(String, u16), ConfigError> {
     Ok((
         optional("APP_HOST", "0.0.0.0"),
-        optional_parse("APP_PORT", 8080)?,
+        parse_listen_port(
+            env::var("PORT").ok().as_deref(),
+            env::var("APP_PORT").ok().as_deref(),
+        )?,
     ))
+}
+
+pub(crate) fn parse_listen_port(
+    port: Option<&str>,
+    app_port: Option<&str>,
+) -> Result<u16, ConfigError> {
+    match (port, app_port) {
+        (Some(value), _) => parse_number("PORT", value),
+        (None, Some(value)) => parse_number("APP_PORT", value),
+        (None, None) => Ok(8080),
+    }
 }
 
 pub(crate) fn listen_address() -> Result<SocketAddr, ConfigError> {
@@ -100,17 +114,41 @@ where
     T: std::str::FromStr<Err = ParseIntError> + Copy,
 {
     match env::var(name) {
-        Ok(value) => value.parse().map_err(|source| ConfigError::InvalidNumber {
-            name: name.to_owned(),
-            source,
-        }),
+        Ok(value) => parse_number(name, &value),
         Err(_) => Ok(default_value),
     }
+}
+
+fn parse_number<T: std::str::FromStr<Err = ParseIntError>>(
+    name: &str,
+    value: &str,
+) -> Result<T, ConfigError> {
+    value.parse().map_err(|source| ConfigError::InvalidNumber {
+        name: name.to_owned(),
+        source,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn listen_port_uses_port_then_app_port_then_default() {
+        assert_eq!(parse_listen_port(None, None).unwrap(), 8080);
+        assert_eq!(parse_listen_port(None, Some("9001")).unwrap(), 9001);
+        assert_eq!(parse_listen_port(Some("9002"), Some("9001")).unwrap(), 9002);
+    }
+
+    #[test]
+    fn invalid_listen_port_reports_the_selected_variable() {
+        for value in ["", "invalid", "65536"] {
+            let error = parse_listen_port(Some(value), Some("8080")).unwrap_err();
+            assert!(matches!(error, ConfigError::InvalidNumber { name, .. } if name == "PORT"));
+            let error = parse_listen_port(None, Some(value)).unwrap_err();
+            assert!(matches!(error, ConfigError::InvalidNumber { name, .. } if name == "APP_PORT"));
+        }
+    }
 
     #[test]
     fn content_previews_require_explicit_true() {

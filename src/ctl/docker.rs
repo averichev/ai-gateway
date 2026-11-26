@@ -78,9 +78,9 @@ impl DockerClient {
         inspect_field(name, "{{.Config.Image}}")
     }
 
-    pub fn published_port(&self, name: &str, container_port: u16) -> Result<Option<String>> {
-        let port_spec = format!("{container_port}/tcp");
-        match run_command("docker", ["port", name, &port_spec]) {
+    pub fn published_ports(&self, name: &str) -> Result<Option<String>> {
+        match run_command("docker", ["port", name]) {
+            Ok(output) if output.stdout.trim().is_empty() => Ok(None),
             Ok(output) => Ok(Some(output.stdout.trim().to_owned())),
             Err(CtlError::CommandFailed { .. }) => Ok(None),
             Err(error) => Err(error),
@@ -102,9 +102,10 @@ impl DockerClient {
     pub fn run_gateway_container(
         &self,
         config: &CtlConfig,
+        container_port: u16,
         source_file: Option<&Path>,
     ) -> Result<()> {
-        let port_mapping = format!("{}:8080", config.published_port);
+        let port_mapping = format!("{}:{container_port}", config.published_port);
         let volume_mapping = format!("{}:/var/lib/postgresql/data", config.volume_name);
 
         let mut args = vec![
@@ -116,6 +117,8 @@ impl DockerClient {
             "unless-stopped".to_owned(),
             "--env-file".to_owned(),
             config.env_file.display().to_string(),
+            "-e".to_owned(),
+            format!("PORT={container_port}"),
             "-p".to_owned(),
             port_mapping,
             "-v".to_owned(),

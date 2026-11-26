@@ -3,7 +3,6 @@ REGISTRY ?= ghcr.io
 IMAGE_REPO ?= your-org/$(APP_NAME)
 IMAGE ?= $(REGISTRY)/$(IMAGE_REPO)
 TAG ?= latest
-PORT ?= 8080
 CONTAINER_NAME ?= $(APP_NAME)
 ENV_FILE ?= .env
 DOCKER_BUILDER ?= $(shell docker context show 2>/dev/null || echo default)
@@ -49,12 +48,19 @@ docker-check:
 docker-build: docker-check
 	docker buildx build --builder $(DOCKER_BUILDER) $(DOCKER_BUILD_FLAGS) -t $(IMAGE):$(TAG) .
 
+# Docker needs the listener port from the env-file when publishing it on the host.
 docker-run: docker-check ensure-env
+	@container_port=$$(awk -F= 'BEGIN { ports["APP_PORT"] = 8080 } \
+		{ sub(/^[[:space:]]+/, ""); sub(/\r$$/, "") } \
+		/^(PORT|APP_PORT)$$/ && ($$1 in ENVIRON) { ports[$$1] = ENVIRON[$$1] } \
+		/^(PORT|APP_PORT)=/ { ports[$$1] = substr($$0, index($$0, "=") + 1) } \
+		END { print ("PORT" in ports) ? ports["PORT"] : ports["APP_PORT"] }' "$(ENV_FILE)") && \
 	docker run -d \
 		--name $(CONTAINER_NAME) \
 		--restart unless-stopped \
-		--env-file $(ENV_FILE) \
-		-p $(PORT):8080 \
+		--env-file "$(ENV_FILE)" \
+		-e "PORT=$$container_port" \
+		-p "$${PORT:-$$container_port}:$$container_port" \
 		-v $(CONTAINER_NAME)-pgdata:/var/lib/postgresql/data \
 		$(DOCKER_RUN_FLAGS) \
 		$(IMAGE):$(TAG)

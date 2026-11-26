@@ -5,7 +5,6 @@ export POSTGRES_USER="${POSTGRES_USER:-ai_gateway}"
 export POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-ai_gateway}"
 export POSTGRES_DB="${POSTGRES_DB:-ai_gateway}"
 export APP_HOST="${APP_HOST:-0.0.0.0}"
-export APP_PORT="${APP_PORT:-8080}"
 export ADMIN_DIST_DIR="${ADMIN_DIST_DIR:-/app/admin/dist}"
 # agctl replaces the image containing the server, frontend and PostgreSQL.
 export GATEWAY_UPDATE_MODE=external

@@ -29,7 +29,6 @@ COPY docker/postgresql.conf /etc/postgresql/postgresql.conf
 RUN chmod +x /app/entrypoint.sh
 
 ENV APP_HOST=0.0.0.0 \
-    APP_PORT=8080 \
     ADMIN_DIST_DIR=/app/admin/dist
 
 EXPOSE 8080 5432

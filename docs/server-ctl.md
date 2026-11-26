@@ -55,7 +55,7 @@ volume_name = "ai-gateway-pgdata"
 - `env_file` — путь к runtime env;
 - `image` — Docker image, который будет запускаться;
 - `container_name` — имя production-контейнера;
-- `published_port` — внешний HTTP-порт;
+- `published_port` — HTTP-порт на хосте. Для порта внутри контейнера `agctl` читает `PORT` из `.env`, при его отсутствии — `APP_PORT`. По умолчанию используется `8080`.
 - `volume_name` — volume для встроенного PostgreSQL.
 
 ## Команды

@@ -187,6 +187,7 @@ fn env_validate(config_path: &Path) -> Result<()> {
     let placeholders = env.placeholder_required_keys();
 
     if missing.is_empty() && placeholders.is_empty() {
+        env.container_port()?;
         env.update_source()?;
         print_success("Env-файл выглядит корректно");
         Ok(())
@@ -332,6 +333,13 @@ async fn doctor(config_path: &Path) -> Result<()> {
             ));
 
             let env = EnvFile::load(&config.env_file)?;
+            if let Err(error) = env.container_port() {
+                rows.push((
+                    "HTTP-порт контейнера".into(),
+                    CheckState::Fail,
+                    error.to_string(),
+                ));
+            }
             match env.update_source() {
                 Ok(Some(_)) => rows.push((
                     "Источник обновлений".into(),
@@ -444,6 +452,7 @@ async fn apply(config_path: &Path) -> Result<()> {
         )));
     }
 
+    let container_port = env.container_port()?;
     let source_file = env.update_source()?.and_then(|source| source.legacy_file());
     print_section("Применение конфигурации");
     print_info(&format!("Скачиваю image {}", config.image));
@@ -460,7 +469,7 @@ async fn apply(config_path: &Path) -> Result<()> {
         "Запускаю контейнер {} на порту {}",
         config.container_name, config.published_port
     ));
-    docker.run_gateway_container(&config, source_file)?;
+    docker.run_gateway_container(&config, container_port, source_file)?;
 
     wait_for_healthcheck(&config).await?;
     print_success("Конфигурация применена, healthcheck пройден");
@@ -508,7 +517,7 @@ async fn status(config_path: &Path) -> Result<()> {
         rows.push(("Запущенный image".to_owned(), image));
     }
 
-    if let Some(mapping) = docker.published_port(&config.container_name, 8080)? {
+    if let Some(mapping) = docker.published_ports(&config.container_name)? {
         rows.push(("Проброс порта".to_owned(), mapping));
     }
 

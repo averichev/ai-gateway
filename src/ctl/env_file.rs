@@ -1,11 +1,10 @@
 use std::{collections::BTreeMap, ffi::OsStr, fs, path::Path};
 
 use super::{CtlError, Result};
-use crate::updates::UpdateLocation;
+use crate::{config::parse_listen_port, updates::UpdateLocation};
 
 pub const REQUIRED_ENV_KEYS: &[&str] = &[
     "APP_HOST",
-    "APP_PORT",
     "DATABASE_URL",
     "GATEWAY_MASTER_KEY",
     "ADMIN_DIST_DIR",
@@ -54,6 +53,17 @@ impl EnvFile {
 
     pub fn get(&self, key: &str) -> Option<&str> {
         self.values.get(key).map(String::as_str)
+    }
+
+    pub(super) fn container_port(&self) -> Result<u16> {
+        let port = parse_listen_port(self.get("PORT"), self.get("APP_PORT"))
+            .map_err(|error| CtlError::Validation(error.to_string()))?;
+        if port == 0 {
+            return Err(CtlError::Validation(
+                "Для проброса HTTP-порта в Docker укажите порт от 1 до 65535".into(),
+            ));
+        }
+        Ok(port)
     }
 
     pub(super) fn update_source(&self) -> Result<Option<UpdateLocation<'_>>> {

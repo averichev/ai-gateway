@@ -1,15 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
 import { useAuth } from './auth'
-import GatewayClientsView from './views/GatewayClientsView.vue'
-import LoginView from './views/LoginView.vue'
-import ModelRoutesView from './views/ModelRoutesView.vue'
-import ProvidersView from './views/ProvidersView.vue'
-import GenerateTestView from './views/GenerateTestView.vue'
-import RequestDetailsView from './views/RequestDetailsView.vue'
-import RequestsListView from './views/RequestsListView.vue'
-import TenantsView from './views/TenantsView.vue'
-import UsersView from './views/UsersView.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -21,49 +12,49 @@ const router = createRouter({
     {
       path: '/login',
       name: 'login',
-      component: LoginView,
+      component: () => import('./views/LoginView.vue'),
       meta: { public: true },
     },
     {
       path: '/requests',
       name: 'requests',
-      component: RequestsListView,
+      component: () => import('./views/RequestsListView.vue'),
     },
     {
       path: '/generate-test',
       name: 'generate-test',
-      component: GenerateTestView,
+      component: () => import('./views/GenerateTestView.vue'),
     },
     {
       path: '/requests/:id',
       name: 'request-details',
-      component: RequestDetailsView,
+      component: () => import('./views/RequestDetailsView.vue'),
       props: true,
     },
     {
       path: '/providers',
       name: 'providers',
-      component: ProvidersView,
+      component: () => import('./views/ProvidersView.vue'),
     },
     {
       path: '/gateway-clients',
       name: 'gateway-clients',
-      component: GatewayClientsView,
+      component: () => import('./views/GatewayClientsView.vue'),
     },
     {
       path: '/model-routes',
       name: 'model-routes',
-      component: ModelRoutesView,
+      component: () => import('./views/ModelRoutesView.vue'),
     },
     {
       path: '/tenants',
       name: 'tenants',
-      component: TenantsView,
+      component: () => import('./views/TenantsView.vue'),
     },
     {
       path: '/users',
       name: 'users',
-      component: UsersView,
+      component: () => import('./views/UsersView.vue'),
     },
     {
       path: '/updates',

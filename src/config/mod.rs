@@ -7,7 +7,7 @@ pub struct AppConfig {
     pub server_host: String,
     pub server_port: u16,
     pub database_url: String,
-    pub gateway_master_key: String,
+    pub gateway_master_key: Option<String>,
     pub default_provider_code: String,
     pub default_provider_kind: String,
     pub default_provider_base_url: String,
@@ -24,8 +24,10 @@ pub struct AppConfig {
 pub enum ConfigError {
     #[error("invalid IP address in environment variable `APP_HOST`")]
     InvalidListenAddress,
-    #[error("missing required environment variable `{0}`")]
-    Missing(String),
+    #[error("invalid DATABASE_URL")]
+    InvalidDatabaseUrl,
+    #[error("GATEWAY_MASTER_KEY must be a base64-encoded 32-byte key")]
+    InvalidMasterKey,
     #[error("environment variable `{0}` must be true or false")]
     InvalidBoolean(String),
     #[error("invalid number in environment variable `{name}`: {source}")]
@@ -39,11 +41,16 @@ pub enum ConfigError {
 impl AppConfig {
     pub fn from_env() -> Result<Self, ConfigError> {
         let (server_host, server_port) = listen_settings()?;
+        let gateway_master_key = match env::var("GATEWAY_MASTER_KEY") {
+            Ok(key) => Some(key),
+            Err(env::VarError::NotPresent) => None,
+            Err(env::VarError::NotUnicode(_)) => return Err(ConfigError::InvalidMasterKey),
+        };
         Ok(Self {
             server_host,
             server_port,
-            database_url: required("DATABASE_URL")?,
-            gateway_master_key: required("GATEWAY_MASTER_KEY")?,
+            database_url: database_url()?,
+            gateway_master_key,
             default_provider_code: optional("DEFAULT_PROVIDER_CODE", "openai"),
             default_provider_kind: optional("DEFAULT_PROVIDER_KIND", "openai-compatible"),
             default_provider_base_url: optional(
@@ -60,6 +67,14 @@ impl AppConfig {
             response_preview_chars: optional_parse("RESPONSE_PREVIEW_CHARS", 2_000)?,
             admin_dist_dir: optional("ADMIN_DIST_DIR", "admin/dist"),
         })
+    }
+}
+
+pub fn database_url() -> Result<String, ConfigError> {
+    match env::var("DATABASE_URL") {
+        Ok(url) if !url.trim().is_empty() => Ok(url),
+        Err(env::VarError::NotPresent) => Ok("sqlite://ai-gateway.sqlite3".to_owned()),
+        _ => Err(ConfigError::InvalidDatabaseUrl),
     }
 }
 
@@ -99,10 +114,6 @@ fn parse_store_content_previews(value: Option<&str>) -> Result<bool, ConfigError
             "STORE_CONTENT_PREVIEWS".to_owned(),
         )),
     }
-}
-
-fn required(name: &str) -> Result<String, ConfigError> {
-    env::var(name).map_err(|_| ConfigError::Missing(name.to_owned()))
 }
 
 fn optional(name: &str, default_value: &str) -> String {

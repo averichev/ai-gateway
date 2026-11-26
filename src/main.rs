@@ -1,4 +1,12 @@
+use std::process::ExitCode;
+
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    ai_gateway::server::run().await
+async fn main() -> ExitCode {
+    match ai_gateway::server::run().await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("Error: {error}");
+            ExitCode::FAILURE
+        }
+    }
 }

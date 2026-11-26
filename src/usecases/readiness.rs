@@ -6,21 +6,21 @@ use crate::{
         RouteReadinessDto,
     },
     providers::ProviderRegistry,
-    repositories::{PostgresRoutesRepository, RepositoryError},
+    repositories::{RepositoryError, RoutesRepository},
     security::SecretCrypto,
 };
 use uuid::Uuid;
 
 #[derive(Clone)]
 pub struct ReadinessService {
-    routes: Arc<PostgresRoutesRepository>,
+    routes: Arc<RoutesRepository>,
     providers: ProviderRegistry,
     crypto: SecretCrypto,
 }
 
 impl ReadinessService {
     pub fn new(
-        routes: Arc<PostgresRoutesRepository>,
+        routes: Arc<RoutesRepository>,
         providers: ProviderRegistry,
         crypto: SecretCrypto,
     ) -> Self {
@@ -135,7 +135,7 @@ impl ReadinessService {
             .is_some_and(|secret| self.crypto.provider_api_key(secret).is_ok());
         result.check("provider_credentials", credentials_ok,
             if secret.is_some() { ReadinessStatus::Unavailable } else { ReadinessStatus::Incomplete },
-            "Сохраните API key провайдера; если secret не расшифровывается, проверьте GATEWAY_MASTER_KEY и сохраните ключ заново");
+            "Сохраните API key провайдера. При ошибке расшифровки проверьте прежний мастер-ключ в GATEWAY_MASTER_KEY или ai-gateway.key");
         Ok(result)
     }
 }

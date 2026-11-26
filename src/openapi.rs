@@ -41,7 +41,7 @@ const API_DESCRIPTION: &str = r#"AI Gateway - внутренний HTTP gateway 
 - сервис не является прозрачной заменой OpenAI, Anthropic или Claude SDK;
 - Tool Calling передаёт определения, вызовы и результаты инструментов; gateway их не выполняет;
 - vendor-compatible endpoints вроде `/v1/chat/completions`, streaming, embeddings и quotas пока не реализованы;
-- provider secrets хранятся encrypted-at-rest в `provider_secrets`, master key приходит из `GATEWAY_MASTER_KEY`.
+- provider secrets хранятся encrypted-at-rest в `provider_secrets`, мастер-ключ берётся из `GATEWAY_MASTER_KEY` или файла `ai-gateway.key`.
 "#;
 
 #[derive(OpenApi)]

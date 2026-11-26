@@ -4,3 +4,8 @@ admin/node_modules
 admin/dist
 .env
 .DS_Store
+
+ai-gateway.sqlite3
+ai-gateway.sqlite3-*
+**/ai-gateway.key
+**/.ai-gateway.key-*

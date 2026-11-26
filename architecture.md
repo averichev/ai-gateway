@@ -7,7 +7,7 @@
 - резолвит alias в реальный provider и внешнюю модель;
 - вызывает внешний AI API через provider adapter;
 - нормализует текст, tool calls, finish reason и usage в свой внутренний контракт;
-- сохраняет историю запроса в PostgreSQL.
+- сохраняет историю запроса в SQLite или PostgreSQL.
 
 Главный принцип MVP: минимальная архитектура без универсального AI-runtime.
 
@@ -63,14 +63,14 @@ Use case делает только практические шаги:
 
 Хранилище намеренно простое:
 
-- `PostgresRoutesRepository`
-- `PostgresRequestsRepository`
+- `RoutesRepository`
+- `RequestsRepository`
 
 Repository-слой не знает про HTTP и не содержит логики вызова провайдера.
 
 ### Конфигурация маршрутов
 
-Маршруты и providers хранятся в PostgreSQL с tenant scope. Существующий механизм `provider_secrets` хранит ключи encrypted-at-rest; master key приходит из `GATEWAY_MASTER_KEY` в env.
+Маршруты и providers относятся к конкретному tenant в обеих базах. Таблица `provider_secrets` хранит ключи в зашифрованном виде. Шлюз читает мастер-ключ из `GATEWAY_MASTER_KEY` либо использует `ai-gateway.key` в рабочей папке.
 
 Это даёт удобный компромисс:
 
@@ -84,11 +84,11 @@ Repository-слой не знает про HTTP и не содержит лог�
 flowchart LR
 client[ClientApp] --> generateApi[POST_api_v1_generate]
 generateApi --> generateUseCase[GenerateService]
-generateUseCase --> routesRepo[PostgresRoutesRepository]
+generateUseCase --> routesRepo[RoutesRepository]
 generateUseCase --> providerRegistry[ProviderRegistry]
 providerRegistry --> providerAdapter[OpenAiCompatibleProvider]
 providerAdapter --> upstream[ExternalLLMApi]
-generateUseCase --> requestsRepo[PostgresRequestsRepository]
+generateUseCase --> requestsRepo[RequestsRepository]
 generateApi --> client
 ```
 
@@ -124,7 +124,7 @@ Gateway -> ProviderAdapter -> LLM -> Factum (final answer)
 
 ## Почему `sqlx`
 
-`sqlx + PostgreSQL` выбраны как минимальный внятный путь для боевого хранения:
+SQLx выполняет общие запросы через типизированный пул SQLite или PostgreSQL. Для каждого движка используются его миграции. В базе хранятся
 
 - история запросов;
 - providers;
@@ -137,10 +137,10 @@ ORM не добавлялся сознательно, чтобы не услож
 - единый endpoint `POST /api/v1/generate`;
 - routing по alias модели;
 - один рабочий provider adapter `openai-compatible`;
-- хранение истории запросов в PostgreSQL;
+- хранение истории запросов в SQLite или PostgreSQL;
 - базовый admin API;
 - минимальный PrimeVue admin;
-- запуск в одном Docker-контейнере с PostgreSQL внутри.
+- запуск отдельным бинарником или в Docker с постоянным томом данных.
 
 ## Архитектурное направление
 
@@ -195,5 +195,5 @@ VALUES ('cheap-default', 'openai', 'gpt-4.1-mini', TRUE);
 - только синхронный сценарий `request -> response`;
 - только один реализованный provider kind;
 - preview в истории сокращённый и не предназначен для полного аудита;
-- для локальной простоты PostgreSQL живёт в том же контейнере, что и приложение;
+- файл SQLite требует постоянной рабочей папки с правом записи;
 - текущий UI только читает данные, но не редактирует конфигурацию.

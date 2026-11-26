@@ -39,16 +39,16 @@
 ## Что есть в MVP
 
 - Rust backend на `axum`;
-- PostgreSQL-хранилище для providers, model routes и истории запросов;
+- SQLite по умолчанию и поддержка PostgreSQL для providers, model routes и истории запросов;
 - users/tenants/tenant_members и session-based admin auth;
 - gateway clients с machine tokens для Factum backend;
-- encrypted-at-rest provider secrets через `GATEWAY_MASTER_KEY`;
+- шифрование ключей провайдеров с помощью AES-256-GCM;
 - `POST /api/v1/generate` для текста и структурированного Tool Calling;
 - admin API;
 - Swagger UI;
 - PrimeVue admin UI;
 - smoke-test генерации из админки;
-- Docker image, где runtime-контейнер запускает приложение и PostgreSQL;
+- Docker image с постоянным томом данных;
 - `agctl` для управления деплоем на VPS.
 
 Глобальному владельцу доступна страница **Конфигурация → Обновления**. В `.env.example` настроен официальный канал AI Gateway. По команде владельца шлюз проверяет манифест и подпись выпуска встроенным ключом. В Docker образ устанавливается через `agctl`. Отдельная Linux-служба поддерживает установку и откат бинарника со встроенной админкой. [Настройка подписанных обновлений](docs/standalone-updates.md)
@@ -160,16 +160,15 @@ Gateway передаёт definitions и результаты инструмен�
 
 ## Проверки backend
 
-Интеграционные тесты поднимают контролируемый HTTP upstream и реальный Axum gateway. Нужен отдельный PostgreSQL с правом `CREATE DATABASE`: `sqlx::test` создаёт и удаляет отдельную БД для каждого теста. Не используйте production instance.
+Интеграционные тесты запускают Axum gateway и тестовый HTTP upstream. Для каждого теста SQLx создаёт изолированную базу SQLite.
 
 ```bash
-export DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/postgres
 cargo fmt --all -- --check
 cargo test
 cargo clippy --all-targets -- -D warnings
 ```
 
-Тесты проверяют реальные HTTP payloads, полный цикл с одним/несколькими вызовами, `tool_choice`, сохранность аргументов, ошибки и лимиты, usage, machine auth, tenant-local routing и историю.
+Для проверки PostgreSQL запустите `cargo test --features postgres-tests` с `DATABASE_URL` отдельного тестового экземпляра и правом `CREATE DATABASE`. Тот же набор тестов проверяет реальные HTTP payloads, полный цикл с одним/несколькими вызовами, `tool_choice`, сохранность аргументов, ошибки и лимиты, usage, machine auth, tenant-local routing и историю.
 
 ## Admin UI
 
@@ -196,10 +195,10 @@ http://localhost:8080/
 
 Основные env-переменные:
 
-- `APP_HOST`
+- `APP_HOST` необязателен. По умолчанию шлюз слушает все IPv4-интерфейсы (`0.0.0.0`). Чтобы принимать только локальные подключения, задайте `APP_HOST=127.0.0.1`.
 - `PORT` — HTTP-порт шлюза. При отсутствии `PORT` используется `APP_PORT`, затем значение по умолчанию `8080`.
-- `DATABASE_URL`
-- `GATEWAY_MASTER_KEY` - base64-encoded 32-byte key для AES-256-GCM provider secrets
+- `DATABASE_URL` необязателен. Без него шлюз создаёт или открывает `ai-gateway.sqlite3` в рабочей папке. Задайте `sqlite:///абсолютный/путь/файл.sqlite3` для другого расположения или `postgresql://…` для PostgreSQL.
+- `GATEWAY_MASTER_KEY` необязателен. Явно заданный ключ из 32 байт в Base64 имеет приоритет над файлом `ai-gateway.key`.
 - `DEFAULT_PROVIDER_CODE`
 - `DEFAULT_PROVIDER_KIND`
 - `DEFAULT_PROVIDER_BASE_URL`
@@ -214,6 +213,12 @@ http://localhost:8080/
 При старте приложение применяет migrations и делает upsert default provider/model route в tenant `default`. Provider API key задаётся через admin UI и хранится только encrypted-at-rest.
 
 ## Запуск
+
+При первом запуске без `GATEWAY_MASTER_KEY` шлюз создаёт случайный мастер-ключ в файле `ai-gateway.key` в рабочей папке (права `0600` в Unix). При следующих запусках он читает этот файл. Для восстановления сохранённых секретов нужна резервная копия базы и соответствующего ключа.
+
+Если установка уже использует `GATEWAY_MASTER_KEY`, сохраните прежнее значение. Для перехода на файл запишите тот же ключ в `ai-gateway.key` с доступом только для пользователя службы, затем удалите переменную из окружения. Несколько экземпляров шлюза с одной базой должны использовать один мастер-ключ.
+
+В «Мой хост» для запуска на порту `3002` укажите `3002` в поле порта и передайте `PORT=3002` в окружение службы. Файлы `ai-gateway.sqlite3` и `ai-gateway.key` будут в `/var/lib/host-util/apps/ai-gateway/`. Готовность проверяется на сервере командой `curl -fsS http://127.0.0.1:3002/ready`.
 
 Для запуска из исходников на порту `9090` задайте `PORT` в окружении процесса или в корневом `.env`.
 
@@ -231,14 +236,14 @@ make run
 
 ```bash
 docker build -t ai-gateway .
-docker run --rm --env-file .env -e PORT=9090 -p 9090:9090 ai-gateway
+docker run --rm --env-file .env -e PORT=9090 -p 9090:9090 -v ai-gateway-data:/var/lib/ai-gateway ai-gateway
 ```
 
 При внешнем порте `9090` API и админка доступны на `http://localhost:9090/`, а Swagger UI — на `http://localhost:9090/swagger-ui/`.
 
 ## Хранилище и маршрутизация
 
-Схема PostgreSQL состоит из трех основных таблиц:
+В базе есть три основные таблицы маршрутизации и истории.
 
 - `users`, `tenants`, `tenant_members` - admin auth и tenant access;
 - `gateway_clients` - machine clients, в БД только token hash;
@@ -313,6 +318,6 @@ unset GATEWAY_MACHINE_TOKEN
 
 Эти вызовы могут тарифицироваться провайдером и запускаются только явно. Readiness не подтверждает доступность модели, действительность ключа у провайдера или поддержку Tool Calling. Ручная «Проверка генерации» в Admin UI также выполняет реальный вызов, проверяет только текст и сохраняет существующий контракт. Автоматических повторов, fallback и переходов по upstream redirects нет; в том числе удалён прежний повтор с заменой `max_tokens`. Если модель отклоняет этот параметр, исключите `options.max_tokens` и повторите вручную.
 
-CI и `cargo test` используют только mock upstream и отдельный PostgreSQL, без оплачиваемого API. Интеграционные тесты дополнительно запускают сам Python-скрипт через Gateway с mock upstream, проверяют admin smoke-test, CLI-очистку и отсутствие секретов в диагностике. Сборка Admin UI: `cd admin && npm ci && npm run build` (Node.js 22.12+).
+`cargo test` использует SQLite и локальный тестовый upstream. Интеграционные тесты дополнительно запускают сам Python-скрипт через Gateway с mock upstream, проверяют admin smoke-test, CLI-очистку и отсутствие секретов в диагностике. Сборка Admin UI: `cd admin && npm ci && npm run build` (Node.js 22.12+).
 
 Подробные статусы readiness и диагностика ошибок: [REST API](docs/rest-api.md#диагностика-маршрута-модели).

@@ -123,6 +123,8 @@ impl DockerClient {
             port_mapping,
             "-v".to_owned(),
             volume_mapping,
+            "-v".to_owned(),
+            format!("{}-data:/var/lib/ai-gateway", config.container_name),
         ];
         if let Some(path) = source_file {
             const DESTINATION: &str = "/etc/ai-gateway/update-source.json";

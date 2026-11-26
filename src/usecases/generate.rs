@@ -10,14 +10,14 @@ use crate::{
         GenerateResponseDto, ProviderGenerateResult, RequestLogInsert, ResolvedRouteRecord,
     },
     providers::{ProviderError, ProviderRegistry},
-    repositories::{PostgresRequestsRepository, PostgresRoutesRepository, RepositoryError},
+    repositories::{RepositoryError, RequestsRepository, RoutesRepository},
     security::SecretCrypto,
 };
 
 #[derive(Clone)]
 pub struct GenerateService {
-    routes_repo: Arc<PostgresRoutesRepository>,
-    requests_repo: Arc<PostgresRequestsRepository>,
+    routes_repo: Arc<RoutesRepository>,
+    requests_repo: Arc<RequestsRepository>,
     providers: ProviderRegistry,
     secret_crypto: SecretCrypto,
     previews: ContentPreviewPolicy,
@@ -42,8 +42,8 @@ impl Default for ContentPreviewPolicy {
 
 impl GenerateService {
     pub fn new(
-        routes_repo: Arc<PostgresRoutesRepository>,
-        requests_repo: Arc<PostgresRequestsRepository>,
+        routes_repo: Arc<RoutesRepository>,
+        requests_repo: Arc<RequestsRepository>,
         providers: ProviderRegistry,
         secret_crypto: SecretCrypto,
         previews: ContentPreviewPolicy,

@@ -22,10 +22,7 @@ use crate::{
     domain::{ErrorBodyDto, ErrorResponseDto, HealthResponseDto},
     http::{admin, auth, generate, updates},
     openapi::ApiDoc,
-    repositories::{
-        PostgresAuthRepository, PostgresRequestsRepository, PostgresRoutesRepository,
-        RepositoryError,
-    },
+    repositories::{AuthRepository, RepositoryError, RequestsRepository, RoutesRepository},
     security::SecretCrypto,
     usecases::generate::{GenerateService, ServiceError},
     usecases::readiness::ReadinessService,
@@ -33,15 +30,15 @@ use crate::{
 
 const HEALTHCHECK_DESCRIPTION: &str = r#"Проверяет, что HTTP-сервис запущен и способен ответить.
 
-Это shallow healthcheck текущего процесса. Он не проверяет PostgreSQL, provider routes, наличие API keys и доступность upstream AI providers."#;
+Это shallow healthcheck текущего процесса. Он не проверяет хранилище, provider routes, наличие API keys и доступность upstream AI providers."#;
 
 #[derive(Clone)]
 pub struct AppState {
     pub generate_service: Arc<GenerateService>,
     pub readiness_service: Arc<ReadinessService>,
-    pub auth_repo: Arc<PostgresAuthRepository>,
-    pub routes_repo: Arc<PostgresRoutesRepository>,
-    pub requests_repo: Arc<PostgresRequestsRepository>,
+    pub auth_repo: Arc<AuthRepository>,
+    pub routes_repo: Arc<RoutesRepository>,
+    pub requests_repo: Arc<RequestsRepository>,
     pub secret_crypto: SecretCrypto,
     pub admin_dist_dir: String,
     pub updates: crate::updates::Updates,

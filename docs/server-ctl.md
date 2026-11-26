@@ -56,7 +56,7 @@ volume_name = "ai-gateway-pgdata"
 - `image` — Docker image, который будет запускаться;
 - `container_name` — имя production-контейнера;
 - `published_port` — HTTP-порт на хосте. Для порта внутри контейнера `agctl` читает `PORT` из `.env`, при его отсутствии — `APP_PORT`. По умолчанию используется `8080`.
-- `volume_name` — volume для встроенного PostgreSQL.
+- `volume_name` — том встроенного PostgreSQL. Для SQLite `agctl` монтирует том `<container_name>-data` в `/var/lib/ai-gateway`.
 
 ## Команды
 
@@ -106,12 +106,12 @@ agctl --config /srv/ai-gateway/ctl.toml init --app-dir /srv/ai-gateway
 Пример:
 
 ```bash
-agctl env set GATEWAY_MASTER_KEY '<base64-32-byte-key>'
+agctl env set DEFAULT_MODEL_ALIAS smart-default
 ```
 
 ### `agctl env validate`
 
-Проверяет обязательные переменные и не пропускает placeholder-значения вроде `replace-me`.
+Проверяет явно заданные параметры окружения. Мастер-ключ можно опустить. При первом запуске шлюз создаст `/var/lib/ai-gateway/ai-gateway.key` в постоянном томе контейнера.
 
 `agctl init` записывает URL официального манифеста в `GATEWAY_UPDATE_SOURCE` при создании `.env`. Команды `env validate`, `doctor` и `apply` проверяют допустимость адреса до запуска контейнера. `apply` передаёт URL через `.env`. Для существующих конфигураций с абсолютным путём к JSON-файлу сохраняется подключение файла только для чтения. [Подписанные обновления](standalone-updates.md)
 
@@ -195,7 +195,6 @@ agctl doctor
 agctl docker ensure
 agctl init
 agctl image set ghcr.io/<username>/ai-gateway:v0.1.0
-agctl env set GATEWAY_MASTER_KEY '<base64-32-byte-key>'
 agctl env validate
 agctl apply
 agctl status

@@ -1,6 +1,8 @@
-use ai_gateway::repositories::PostgresRequestsRepository;
+use ai_gateway::{
+    config::database_url,
+    repositories::{Database, RequestsRepository},
+};
 use clap::Parser;
-use sqlx::{ConnectOptions, postgres::PgConnectOptions, postgres::PgPoolOptions};
 use uuid::Uuid;
 
 /// Count legacy content previews; clear them only with --apply.
@@ -31,17 +33,9 @@ async fn main() -> std::process::ExitCode {
 }
 
 async fn run(args: Args) -> Result<(), &'static str> {
-    let url = std::env::var("DATABASE_URL").map_err(|_| "missing_database_url")?;
-    let options = url
-        .parse::<PgConnectOptions>()
-        .map_err(|_| "invalid_database_url")?
-        .disable_statement_logging();
-    let pool = PgPoolOptions::new()
-        .max_connections(1)
-        .connect_with(options)
-        .await
-        .map_err(|_| "database_connection")?;
-    let repo = PostgresRequestsRepository::new(pool);
+    let url = database_url().map_err(|_| "invalid_database_url")?;
+    let pool = Database::open_existing(&url).await?;
+    let repo = RequestsRepository::new(pool);
     let count = repo
         .count_content_previews(args.tenant_id)
         .await

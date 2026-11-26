@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, ffi::OsStr, fs, path::Path};
 use super::{CtlError, Result};
 use crate::{config::parse_listen_port, updates::UpdateLocation};
 
-pub const REQUIRED_ENV_KEYS: &[&str] = &[
+const VALIDATED_ENV_KEYS: &[&str] = &[
     "APP_HOST",
     "DATABASE_URL",
     "GATEWAY_MASTER_KEY",
@@ -95,8 +95,10 @@ impl EnvFile {
     }
 
     pub fn validation_rows(&self) -> Vec<EnvValidationRow> {
-        REQUIRED_ENV_KEYS
+        VALIDATED_ENV_KEYS
             .iter()
+            .copied()
+            .filter(|key| self.get(key).is_some())
             .map(|key| {
                 let value = self.get(key).unwrap_or_default();
                 let status = if value.is_empty() {
@@ -108,7 +110,7 @@ impl EnvFile {
                 };
 
                 EnvValidationRow {
-                    key: (*key).to_owned(),
+                    key: key.to_owned(),
                     status,
                     safe_value: match status {
                         EnvValueStatus::Missing => "-".to_owned(),
@@ -214,6 +216,9 @@ pub fn redact_value(key: &str, value: &str) -> String {
 
 fn is_secret_key(key: &str) -> bool {
     let key = key.to_ascii_uppercase();
+    if key == "DATABASE_URL" {
+        return true;
+    }
     if key.ends_with("_ENV") {
         return false;
     }
@@ -235,6 +240,20 @@ const TEMPLATE_ENV: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/.e
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sqlite_deployment_accepts_an_unset_master_key() {
+        let mut env = EnvFile::default();
+        assert!(env.missing_required_keys().is_empty());
+        assert!(
+            EnvFile::from_template()
+                .unwrap()
+                .get("GATEWAY_MASTER_KEY")
+                .is_none()
+        );
+        env.set("DATABASE_URL", "");
+        assert_eq!(env.missing_required_keys(), ["DATABASE_URL"]);
+    }
 
     #[tokio::test]
     async fn manifest_url_passes_validation_without_a_docker_mount() {

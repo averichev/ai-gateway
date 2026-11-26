@@ -1,5 +1,5 @@
-//! Requires DATABASE_URL pointing to a disposable PostgreSQL instance with
-//! CREATE DATABASE permission. sqlx creates and removes a database per test.
+//! SQLx creates an isolated SQLite database per test by default. Run the same suite
+//! with --features postgres-tests against a disposable PostgreSQL instance.
 use std::{
     collections::VecDeque,
     sync::{
@@ -12,7 +12,7 @@ use ai_gateway::{
     app::{AppState, build_app},
     domain::{SaveModelRouteRequestDto, SaveProviderRequestDto},
     providers::{OpenAiCompatibleProvider, ProviderRegistry},
-    repositories::{PostgresAuthRepository, PostgresRequestsRepository, PostgresRoutesRepository},
+    repositories::{AuthRepository, RequestsRepository, RoutesRepository},
     security::{SecretCrypto, token_hash},
     usecases::{
         generate::{ContentPreviewPolicy, GenerateService},
@@ -28,7 +28,15 @@ use axum::{
 use base64::Engine;
 use reqwest::Client;
 use serde_json::{Value, json};
-use sqlx::PgPool;
+#[cfg(feature = "postgres-tests")]
+use sqlx::PgPool as TestPool;
+#[cfg(not(feature = "postgres-tests"))]
+use sqlx::SqlitePool as TestPool;
+
+#[cfg(not(feature = "postgres-tests"))]
+static TEST_MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations/sqlite");
+#[cfg(feature = "postgres-tests")]
+static TEST_MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 use tokio::{net::TcpListener, task::JoinHandle};
 use uuid::Uuid;
 
@@ -86,15 +94,15 @@ struct Harness {
     _upstream: Server,
     exchanges: Exchanges,
     upstream_hits: Arc<AtomicUsize>,
-    pool: PgPool,
+    pool: TestPool,
     tenants: [Uuid; 2],
     clients: [Uuid; 2],
 }
 impl Harness {
-    async fn new(pool: PgPool) -> Self {
+    async fn new(pool: TestPool) -> Self {
         Self::with_previews(pool, ContentPreviewPolicy::default()).await
     }
-    async fn with_previews(pool: PgPool, previews: ContentPreviewPolicy) -> Self {
+    async fn with_previews(pool: TestPool, previews: ContentPreviewPolicy) -> Self {
         let exchanges = Exchanges::default();
         let upstream_hits = Arc::new(AtomicUsize::new(0));
         let upstream = serve(
@@ -103,23 +111,26 @@ impl Harness {
                 .with_state((exchanges.clone(), upstream_hits.clone())),
         )
         .await;
-        let owner: Uuid = sqlx::query_scalar("INSERT INTO users (email, password_hash, global_role) VALUES ('owner@test', 'unused', 'owner') RETURNING id")
-            .fetch_one(&pool).await.unwrap();
+        let owner = Uuid::new_v4();
+        sqlx::query("INSERT INTO users (id, email, password_hash, global_role) VALUES ($1, 'owner@test', 'unused', 'owner')")
+            .bind(owner).execute(&pool).await.unwrap();
         let crypto =
             SecretCrypto::from_base64(&base64::engine::general_purpose::STANDARD.encode([7u8; 32]))
                 .unwrap();
-        let routes = Arc::new(PostgresRoutesRepository::new(pool.clone()));
-        let auth = Arc::new(PostgresAuthRepository::new(pool.clone()));
-        let requests = Arc::new(PostgresRequestsRepository::new(pool.clone()));
+        let routes = Arc::new(RoutesRepository::new(pool.clone()));
+        let auth = Arc::new(AuthRepository::new(pool.clone()));
+        let requests = Arc::new(RequestsRepository::new(pool.clone()));
         let mut tenants = [Uuid::nil(); 2];
         let mut clients = [Uuid::nil(); 2];
         for (i, suffix) in ["a", "b"].into_iter().enumerate() {
-            tenants[i] =
-                sqlx::query_scalar("INSERT INTO tenants (name, slug) VALUES ($1, $1) RETURNING id")
-                    .bind(format!("tenant-{suffix}"))
-                    .fetch_one(&pool)
-                    .await
-                    .unwrap();
+            tenants[i] = sqlx::query_scalar(
+                "INSERT INTO tenants (id, name, slug) VALUES ($1, $2, $2) RETURNING id",
+            )
+            .bind(Uuid::new_v4())
+            .bind(format!("tenant-{suffix}"))
+            .fetch_one(&pool)
+            .await
+            .unwrap();
             let provider = routes
                 .save_provider(
                     tenants[i],
@@ -297,10 +308,10 @@ fn update_preflight_reads_build_identity_before_configuration() {
     assert_eq!(hex::decode(build.data_compatibility).unwrap().len(), 32);
 }
 
-#[sqlx::test]
-async fn update_operations_require_a_global_owner_even_when_disabled(pool: PgPool) {
+#[sqlx::test(migrator = "TEST_MIGRATOR")]
+async fn update_operations_require_a_global_owner_even_when_disabled(pool: TestPool) {
     let h = Harness::new(pool).await;
-    let auth = PostgresAuthRepository::new(h.pool.clone());
+    let auth = AuthRepository::new(h.pool.clone());
     let tenant_admin = auth
         .create_user(
             "tenant-admin@test",
@@ -395,8 +406,8 @@ async fn update_operations_require_a_global_owner_even_when_disabled(pool: PgPoo
     );
 }
 
-#[sqlx::test]
-async fn update_readiness_depends_on_postgres_and_health_stays_shallow(pool: PgPool) {
+#[sqlx::test(migrator = "TEST_MIGRATOR")]
+async fn update_readiness_depends_on_storage_and_health_stays_shallow(pool: TestPool) {
     let h = Harness::new(pool).await;
     let client = Client::new();
     let ready = format!("{}/ready", h.gateway.url);
@@ -428,8 +439,8 @@ async fn update_readiness_depends_on_postgres_and_health_stays_shallow(pool: PgP
     );
 }
 
-#[sqlx::test]
-async fn full_cycle_preserves_multiple_calls_usage_routing_and_tenant_isolation(pool: PgPool) {
+#[sqlx::test(migrator = "TEST_MIGRATOR")]
+async fn full_cycle_preserves_multiple_calls_usage_routing_and_tenant_isolation(pool: TestPool) {
     let h = Harness::with_previews(
         pool,
         ContentPreviewPolicy {
@@ -516,7 +527,7 @@ async fn full_cycle_preserves_multiple_calls_usage_routing_and_tenant_isolation(
         assert_eq!(entry["input_tokens"], 17);
         assert_eq!(entry["output_tokens"], 9);
         assert!(entry["latency_ms"].as_i64().unwrap() >= 0);
-        let record = PostgresRequestsRepository::new(h.pool.clone())
+        let record = RequestsRepository::new(h.pool.clone())
             .get_request(h.tenants[0], entry["id"].as_str().unwrap())
             .await
             .unwrap()
@@ -524,7 +535,7 @@ async fn full_cycle_preserves_multiple_calls_usage_routing_and_tenant_isolation(
         assert!(record.prompt_preview.is_none());
         assert!(record.response_preview.is_none());
         assert!(
-            PostgresRequestsRepository::new(h.pool.clone())
+            RequestsRepository::new(h.pool.clone())
                 .get_request(h.tenants[1], &record.id)
                 .await
                 .unwrap()
@@ -534,8 +545,8 @@ async fn full_cycle_preserves_multiple_calls_usage_routing_and_tenant_isolation(
     h.assert_consumed();
 }
 
-#[sqlx::test]
-async fn old_text_clients_and_machine_auth_still_work(pool: PgPool) {
+#[sqlx::test(migrator = "TEST_MIGRATOR")]
+async fn old_text_clients_and_machine_auth_still_work(pool: TestPool) {
     let h = Harness::new(pool).await;
     let text_request = json!({"model":"smart-default","messages":[{"role":"system","content":"Help"},{"role":"user","content":"Hi"},{"role":"assistant","content":"Hello"}]});
     let mut expected = text_request.clone();
@@ -573,8 +584,8 @@ async fn old_text_clients_and_machine_auth_still_work(pool: PgPool) {
     h.assert_consumed();
 }
 
-#[sqlx::test]
-async fn invalid_upstream_tool_calls_are_errors_without_argument_leaks(pool: PgPool) {
+#[sqlx::test(migrator = "TEST_MIGRATOR")]
+async fn invalid_upstream_tool_calls_are_errors_without_argument_leaks(pool: TestPool) {
     let h = Harness::new(pool).await;
     let mut malformed = call("call_1", "secret-value");
     malformed["function"]["arguments"] = json!("{secret-value");
@@ -615,7 +626,7 @@ async fn invalid_upstream_tool_calls_are_errors_without_argument_leaks(pool: PgP
         assert_eq!(body["error"]["code"], "provider_invalid_response");
         assert!(!body.to_string().contains("secret-value"));
         assert!(body.get("output_text").is_none());
-        let log = PostgresRequestsRepository::new(h.pool.clone())
+        let log = RequestsRepository::new(h.pool.clone())
             .get_request(h.tenants[0], body["request_id"].as_str().unwrap())
             .await
             .unwrap()
@@ -630,8 +641,8 @@ async fn invalid_upstream_tool_calls_are_errors_without_argument_leaks(pool: PgP
     h.assert_consumed();
 }
 
-#[sqlx::test]
-async fn unsupported_models_are_explicit_and_upstream_errors_are_sanitized(pool: PgPool) {
+#[sqlx::test(migrator = "TEST_MIGRATOR")]
+async fn unsupported_models_are_explicit_and_upstream_errors_are_sanitized(pool: TestPool) {
     let h = Harness::new(pool).await;
     for error in [
         json!({"error":{"message":"This model does not support tools; secret-value", "param":"tools", "code":"unsupported_parameter"}}),
@@ -647,7 +658,7 @@ async fn unsupported_models_are_explicit_and_upstream_errors_are_sanitized(pool:
         let (status, body) = h.generate(&request(), "client-a").await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(body["error"]["code"], "tool_calling_not_supported");
-        let log = PostgresRequestsRepository::new(h.pool.clone())
+        let log = RequestsRepository::new(h.pool.clone())
             .get_request(h.tenants[0], body["request_id"].as_str().unwrap())
             .await
             .unwrap()
@@ -668,8 +679,8 @@ async fn unsupported_models_are_explicit_and_upstream_errors_are_sanitized(pool:
     h.assert_consumed();
 }
 
-#[sqlx::test]
-async fn validates_tools_history_schema_and_http_body_limits(pool: PgPool) {
+#[sqlx::test(migrator = "TEST_MIGRATOR")]
+async fn validates_tools_history_schema_and_http_body_limits(pool: TestPool) {
     let h = Harness::new(pool).await;
     let mut cases = vec![];
     for name in ["", "space name", "инструмент", &"a".repeat(65)] {
@@ -737,8 +748,8 @@ async fn validates_tools_history_schema_and_http_body_limits(pool: PgPool) {
     h.assert_consumed();
 }
 
-#[sqlx::test]
-async fn maps_every_tool_choice_and_preserves_argument_values(pool: PgPool) {
+#[sqlx::test(migrator = "TEST_MIGRATOR")]
+async fn maps_every_tool_choice_and_preserves_argument_values(pool: TestPool) {
     let h = Harness::new(pool).await;
     for (choice, upstream_choice) in [
         (json!("required"), json!("required")),
@@ -809,8 +820,8 @@ async fn maps_every_tool_choice_and_preserves_argument_values(pool: PgPool) {
 }
 
 // G02 privacy and configuration readiness regressions. All upstreams are mocks.
-#[sqlx::test]
-async fn previews_are_opt_in_and_technical_metadata_is_retained(pool: PgPool) {
+#[sqlx::test(migrator = "TEST_MIGRATOR")]
+async fn previews_are_opt_in_and_technical_metadata_is_retained(pool: TestPool) {
     let h = Harness::new(pool).await;
     let request = json!({"model":"smart-default","messages":[
         {"role":"system","content":"private-system"},{"role":"user","content":"private-document"}]});
@@ -824,7 +835,7 @@ async fn previews_are_opt_in_and_technical_metadata_is_retained(pool: PgPool) {
     );
     let (status, body) = h.generate(&request, "client-a").await;
     assert_eq!(status, StatusCode::OK);
-    let repo = PostgresRequestsRepository::new(h.pool.clone());
+    let repo = RequestsRepository::new(h.pool.clone());
     let record = repo
         .get_request(h.tenants[0], body["id"].as_str().unwrap())
         .await
@@ -845,8 +856,8 @@ async fn previews_are_opt_in_and_technical_metadata_is_retained(pool: PgPool) {
     h.assert_consumed();
 }
 
-#[sqlx::test]
-async fn enabled_previews_are_limited_but_all_tool_conversations_stay_private(pool: PgPool) {
+#[sqlx::test(migrator = "TEST_MIGRATOR")]
+async fn enabled_previews_are_limited_but_all_tool_conversations_stay_private(pool: TestPool) {
     let h = Harness::with_previews(
         pool,
         ContentPreviewPolicy {
@@ -868,7 +879,7 @@ async fn enabled_previews_are_limited_but_all_tool_conversations_stay_private(po
     );
     let (status, response) = h.generate(&text, "client-a").await;
     assert_eq!(status, StatusCode::OK);
-    let repo = PostgresRequestsRepository::new(h.pool.clone());
+    let repo = RequestsRepository::new(h.pool.clone());
     let record = repo
         .get_request(h.tenants[0], response["id"].as_str().unwrap())
         .await
@@ -918,12 +929,12 @@ async fn enabled_previews_are_limited_but_all_tool_conversations_stay_private(po
     h.assert_consumed();
 }
 
-#[sqlx::test]
-async fn clearing_previews_preserves_history_and_supports_tenant_scope(pool: PgPool) {
+#[sqlx::test(migrator = "TEST_MIGRATOR")]
+async fn clearing_previews_preserves_history_and_supports_tenant_scope(pool: TestPool) {
     let h = Harness::new(pool).await;
     sqlx::query("INSERT INTO requests (id, tenant_id, gateway_client_id, model_alias, provider_code, external_model, status, latency_ms, input_tokens, output_tokens, prompt_preview, response_preview) VALUES ('old-a', $1, $2, 'smart-default', 'mock', 'tenant-a-model', 'success', 42, 17, 9, 'private-prompt', 'private-response'), ('old-b', $3, $4, 'smart-default', 'mock', 'tenant-b-model', 'provider_error', 52, 10, 1, 'private-prompt', NULL)")
         .bind(h.tenants[0]).bind(h.clients[0]).bind(h.tenants[1]).bind(h.clients[1]).execute(&h.pool).await.unwrap();
-    let repo = PostgresRequestsRepository::new(h.pool.clone());
+    let repo = RequestsRepository::new(h.pool.clone());
     let before = repo
         .get_request(h.tenants[0], "old-a")
         .await
@@ -989,8 +1000,8 @@ fn check_status<'a>(body: &'a Value, code: &str) -> &'a str {
         .unwrap()
 }
 
-#[sqlx::test]
-async fn readiness_checks_configuration_without_upstream_or_history_writes(pool: PgPool) {
+#[sqlx::test(migrator = "TEST_MIGRATOR")]
+async fn readiness_checks_configuration_without_upstream_or_history_writes(pool: TestPool) {
     let h = Harness::new(pool).await;
     let (status, ready) = readiness(&h, h.tenants[0], "smart-default", "admin-session").await;
     assert_eq!(status, StatusCode::OK);
@@ -1036,8 +1047,8 @@ async fn readiness_checks_configuration_without_upstream_or_history_writes(pool:
     h.assert_consumed();
 }
 
-#[sqlx::test]
-async fn readiness_rejects_invalid_parameters_adapter_timeout_and_unreadable_keys(pool: PgPool) {
+#[sqlx::test(migrator = "TEST_MIGRATOR")]
+async fn readiness_rejects_invalid_parameters_adapter_timeout_and_unreadable_keys(pool: TestPool) {
     let h = Harness::new(pool).await;
     for (sql, code, overall) in [
         (
@@ -1066,7 +1077,7 @@ async fn readiness_rejects_invalid_parameters_adapter_timeout_and_unreadable_key
             "unavailable",
         ),
         (
-            "UPDATE provider_secrets SET nonce = decode('00', 'hex') WHERE tenant_id = $1",
+            "UPDATE provider_secrets SET nonce = substr(nonce, 1, 1) WHERE tenant_id = $1",
             "provider_credentials",
             "unavailable",
         ),
@@ -1086,10 +1097,10 @@ async fn readiness_rejects_invalid_parameters_adapter_timeout_and_unreadable_key
     assert_eq!(h.upstream_hits.load(Ordering::SeqCst), 0);
 }
 
-#[sqlx::test]
-async fn readiness_authorizes_before_revealing_route_or_tenant(pool: PgPool) {
+#[sqlx::test(migrator = "TEST_MIGRATOR")]
+async fn readiness_authorizes_before_revealing_route_or_tenant(pool: TestPool) {
     let h = Harness::new(pool).await;
-    let auth = PostgresAuthRepository::new(h.pool.clone());
+    let auth = AuthRepository::new(h.pool.clone());
     let user = auth
         .create_user("viewer@test", "unused", Some(h.tenants[0]), Some("viewer"))
         .await
@@ -1166,9 +1177,9 @@ fn captured_logs() -> Arc<Mutex<Vec<u8>>> {
     .clone()
 }
 
-#[sqlx::test]
+#[sqlx::test(migrator = "TEST_MIGRATOR")]
 async fn errors_and_diagnostic_logs_never_echo_content_credentials_or_database_details(
-    pool: PgPool,
+    pool: TestPool,
 ) {
     let logs = captured_logs();
     let h = Harness::new(pool).await;
@@ -1192,7 +1203,7 @@ async fn errors_and_diagnostic_logs_never_echo_content_credentials_or_database_d
         let (status, body) = h.generate(&text, "client-a").await;
         assert_eq!(status, StatusCode::BAD_GATEWAY);
         assert_eq!(body["error"]["code"], category);
-        let record = PostgresRequestsRepository::new(h.pool.clone())
+        let record = RequestsRepository::new(h.pool.clone())
             .get_request(h.tenants[0], body["request_id"].as_str().unwrap())
             .await
             .unwrap()
@@ -1225,8 +1236,11 @@ async fn errors_and_diagnostic_logs_never_echo_content_credentials_or_database_d
         .unwrap();
 
     // DB errors may include failing rows even with previews enabled. Never format them.
-    sqlx::raw_sql("CREATE FUNCTION fail_history() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'g02-db-error-private-document secret-a'; END $$; CREATE TRIGGER fail_history BEFORE INSERT ON requests FOR EACH ROW EXECUTE FUNCTION fail_history();")
-        .execute(&h.pool).await.unwrap();
+    #[cfg(feature = "postgres-tests")]
+    let fail_history = "CREATE FUNCTION fail_history() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'g02-db-error-private-document secret-a'; END $$; CREATE TRIGGER fail_history BEFORE INSERT ON requests FOR EACH ROW EXECUTE FUNCTION fail_history();";
+    #[cfg(not(feature = "postgres-tests"))]
+    let fail_history = "CREATE TRIGGER fail_history BEFORE INSERT ON requests BEGIN SELECT RAISE(ABORT, 'g02-db-error-private-document secret-a'); END;";
+    sqlx::raw_sql(fail_history).execute(&h.pool).await.unwrap();
     h.expect(
         expected,
         completion(json!(private), vec![], "stop"),
@@ -1234,7 +1248,11 @@ async fn errors_and_diagnostic_logs_never_echo_content_credentials_or_database_d
         "secret-a",
     );
     assert_eq!(h.generate(&text, "client-a").await.0, StatusCode::OK);
-    sqlx::raw_sql("DROP TRIGGER fail_history ON requests; DROP FUNCTION fail_history();")
+    #[cfg(feature = "postgres-tests")]
+    let restore_history = "DROP TRIGGER fail_history ON requests; DROP FUNCTION fail_history();";
+    #[cfg(not(feature = "postgres-tests"))]
+    let restore_history = "DROP TRIGGER fail_history";
+    sqlx::raw_sql(restore_history)
         .execute(&h.pool)
         .await
         .unwrap();
@@ -1290,9 +1308,9 @@ async fn errors_and_diagnostic_logs_never_echo_content_credentials_or_database_d
     assert_eq!(h.upstream_hits.load(Ordering::SeqCst), 4);
 }
 
-#[sqlx::test]
+#[sqlx::test(migrator = "TEST_MIGRATOR")]
 async fn python_smoke_runs_text_and_tool_round_trip_through_gateway_with_mock_upstream(
-    pool: PgPool,
+    pool: TestPool,
 ) {
     let h = Harness::new(pool).await;
     h.expect(json!({"model":"tenant-a-model","messages":[{"role":"user","content":"Reply with a short greeting."}]}),
@@ -1362,8 +1380,8 @@ async fn python_smoke_runs_text_and_tool_round_trip_through_gateway_with_mock_up
     h.assert_consumed();
 }
 
-#[sqlx::test]
-async fn existing_admin_smoke_test_keeps_text_contract_and_private_history(pool: PgPool) {
+#[sqlx::test(migrator = "TEST_MIGRATOR")]
+async fn existing_admin_smoke_test_keeps_text_contract_and_private_history(pool: TestPool) {
     let h = Harness::new(pool).await;
     let request = json!({"model":"smart-default","messages":[{"role":"user","content":"Admin smoke"}],"options":{"temperature":0.2,"max_tokens":32}});
     let mut expected = request.clone();
@@ -1391,7 +1409,7 @@ async fn existing_admin_smoke_test_keeps_text_contract_and_private_history(pool:
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response.json().await.unwrap();
     assert_eq!(body["output_text"], "Admin test OK");
-    let record = PostgresRequestsRepository::new(h.pool.clone())
+    let record = RequestsRepository::new(h.pool.clone())
         .get_request(h.tenants[0], body["id"].as_str().unwrap())
         .await
         .unwrap()
@@ -1411,18 +1429,27 @@ async fn existing_admin_smoke_test_keeps_text_contract_and_private_history(pool:
     h.assert_consumed();
 }
 
-#[sqlx::test]
-async fn preview_cleanup_cli_only_changes_previews_after_explicit_apply(pool: PgPool) {
+#[sqlx::test(migrator = "TEST_MIGRATOR")]
+async fn preview_cleanup_cli_only_changes_previews_after_explicit_apply(pool: TestPool) {
     let h = Harness::new(pool).await;
     sqlx::query("INSERT INTO requests (id, tenant_id, model_alias, status, latency_ms, input_tokens, prompt_preview, response_preview) VALUES ('legacy', $1, 'smart-default', 'success', 12, 34, 'g02-cli-private-prompt', 'g02-cli-private-answer')")
         .bind(h.tenants[0]).execute(&h.pool).await.unwrap();
-    let database: String = sqlx::query_scalar("SELECT current_database()")
-        .fetch_one(&h.pool)
-        .await
-        .unwrap();
-    let mut url = reqwest::Url::parse(&std::env::var("DATABASE_URL").unwrap()).unwrap();
-    url.set_path(&database);
-    let repo = PostgresRequestsRepository::new(h.pool.clone());
+    #[cfg(feature = "postgres-tests")]
+    let url = {
+        let database: String = sqlx::query_scalar("SELECT current_database()")
+            .fetch_one(&h.pool)
+            .await
+            .unwrap();
+        let mut url = reqwest::Url::parse(&std::env::var("DATABASE_URL").unwrap()).unwrap();
+        url.set_path(&database);
+        url.to_string()
+    };
+    #[cfg(not(feature = "postgres-tests"))]
+    let url = format!(
+        "sqlite://{}",
+        h.pool.connect_options().get_filename().display()
+    );
+    let repo = RequestsRepository::new(h.pool.clone());
     for apply in [false, true] {
         let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_purge_previews"));
         command
@@ -1454,8 +1481,8 @@ async fn preview_cleanup_cli_only_changes_previews_after_explicit_apply(pool: Pg
     }
 }
 
-#[sqlx::test]
-async fn python_smoke_explicitly_fails_for_unsupported_or_ignored_tool_calling(pool: PgPool) {
+#[sqlx::test(migrator = "TEST_MIGRATOR")]
+async fn python_smoke_explicitly_fails_for_unsupported_or_ignored_tool_calling(pool: TestPool) {
     let h = Harness::new(pool).await;
     let messages = json!([{"role":"user","content":"Use demo_add_numbers with a=12500 and b=7500. After the tool result, reply with only the sum."}]);
     let tool = json!({"name":"demo_add_numbers","description":"Add exactly two integers for the smoke test.","parameters":{
@@ -1500,19 +1527,20 @@ async fn python_smoke_explicitly_fails_for_unsupported_or_ignored_tool_calling(p
     assert_eq!(h.upstream_hits.load(Ordering::SeqCst), 4);
 }
 
-#[sqlx::test]
-async fn configuration_storage_failures_still_record_safe_technical_history(pool: PgPool) {
+#[sqlx::test(migrator = "TEST_MIGRATOR")]
+async fn configuration_storage_failures_still_record_safe_technical_history(pool: TestPool) {
     let h = Harness::new(pool).await;
     let request = json!({"model":"smart-default","messages":[{"role":"user","content":"g02-private-storage-document"}]});
+    let mut schema_connection = h.pool.acquire().await.unwrap();
     for (table, has_route) in [("model_routes", false), ("provider_secrets", true)] {
         sqlx::raw_sql(&format!("ALTER TABLE {table} RENAME TO hidden_config"))
-            .execute(&h.pool)
+            .execute(&mut *schema_connection)
             .await
             .unwrap();
         let (status, body) = h.generate(&request, "client-a").await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(body["error"]["code"], "storage_error");
-        let record = PostgresRequestsRepository::new(h.pool.clone())
+        let record = RequestsRepository::new(h.pool.clone())
             .get_request(h.tenants[0], body["request_id"].as_str().unwrap())
             .await
             .unwrap()
@@ -1528,7 +1556,7 @@ async fn configuration_storage_failures_still_record_safe_technical_history(pool
                 .contains("g02-private-storage-document")
         );
         sqlx::raw_sql(&format!("ALTER TABLE hidden_config RENAME TO {table}"))
-            .execute(&h.pool)
+            .execute(&mut *schema_connection)
             .await
             .unwrap();
     }

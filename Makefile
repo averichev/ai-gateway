@@ -61,6 +61,7 @@ docker-run: docker-check ensure-env
 		--env-file "$(ENV_FILE)" \
 		-e "PORT=$$container_port" \
 		-p "$${PORT:-$$container_port}:$$container_port" \
+		-v $(CONTAINER_NAME)-data:/var/lib/ai-gateway \
 		-v $(CONTAINER_NAME)-pgdata:/var/lib/postgresql/data \
 		$(DOCKER_RUN_FLAGS) \
 		$(IMAGE):$(TAG)

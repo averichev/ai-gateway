@@ -473,7 +473,7 @@ fn map_write_error(error: RepositoryError) -> AppHttpError {
             AppHttpError::body("conflict", message),
         ),
         RepositoryError::Database(sqlx::Error::Database(database))
-            if database.code().as_deref() == Some("23505") =>
+            if database.is_unique_violation() =>
         {
             AppHttpError::new(
                 axum::http::StatusCode::CONFLICT,

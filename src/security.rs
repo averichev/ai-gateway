@@ -1,3 +1,5 @@
+pub(crate) mod master_key;
+
 use aes_gcm::{
     Aes256Gcm, Key, Nonce,
     aead::{Aead, KeyInit},

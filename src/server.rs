@@ -1,9 +1,5 @@
-use std::{future::IntoFuture, net::SocketAddr, sync::Arc, time::Duration};
+use std::{future::IntoFuture, net::SocketAddr, path::Path, sync::Arc, time::Duration};
 
-use sqlx::{
-    ConnectOptions,
-    postgres::{PgConnectOptions, PgPoolOptions},
-};
 use tokio::net::TcpListener;
 use tracing::info;
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
@@ -12,18 +8,14 @@ use crate::{
     app::{AppState, build_app},
     config::{self, AppConfig},
     providers::{OpenAiCompatibleProvider, ProviderRegistry},
-    repositories::{
-        PostgresAuthRepository, PostgresRequestsRepository, PostgresRoutesRepository, seed_defaults,
-    },
-    security::SecretCrypto,
+    repositories::{AuthRepository, Database, RequestsRepository, RoutesRepository, seed_defaults},
+    security::{SecretCrypto, master_key},
     updates::{Updates, VERSION},
     usecases::{
         generate::{ContentPreviewPolicy, GenerateService},
         readiness::ReadinessService,
     },
 };
-
-pub(crate) static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     if std::env::args_os().skip(1).eq(["--version"]) {
@@ -40,29 +32,30 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     init_tracing();
 
     let config = AppConfig::from_env()?;
-    let connection_options = config
-        .database_url
-        .parse::<PgConnectOptions>()
-        .map_err(|_| "invalid_database_url")?
-        .disable_statement_logging();
-    let pool = PgPoolOptions::new()
-        .max_connections(10)
-        .connect_with(connection_options)
-        .await
-        .map_err(|_| "database_connection_failed")?;
-
-    MIGRATOR
-        .run(&pool)
-        .await
-        .map_err(|_| "database_migration_failed")?;
+    let configured_key = config
+        .gateway_master_key
+        .as_deref()
+        .map(SecretCrypto::from_base64)
+        .transpose()
+        .map_err(|_| config::ConfigError::InvalidMasterKey)?;
+    let pool = Database::initialize(&config.database_url).await?;
+    let routes_repo = Arc::new(RoutesRepository::new(pool.clone()));
+    let secret_crypto = match configured_key {
+        Some(key) => key,
+        None => {
+            let has_provider_secrets = routes_repo
+                .has_provider_secrets()
+                .await
+                .map_err(|_| "provider_secrets_storage_failed")?;
+            master_key::load_or_create(Path::new("."), has_provider_secrets)?
+        }
+    };
     seed_defaults(&pool, &config)
         .await
         .map_err(|_| "default_routes_storage_failed")?;
-    let secret_crypto = SecretCrypto::from_base64(&config.gateway_master_key)?;
 
-    let auth_repo = Arc::new(PostgresAuthRepository::new(pool.clone()));
-    let routes_repo = Arc::new(PostgresRoutesRepository::new(pool.clone()));
-    let requests_repo = Arc::new(PostgresRequestsRepository::new(pool.clone()));
+    let auth_repo = Arc::new(AuthRepository::new(pool.clone()));
+    let requests_repo = Arc::new(RequestsRepository::new(pool.clone()));
 
     let provider_registry = ProviderRegistry::new(vec![Arc::new(OpenAiCompatibleProvider::new()?)]);
     let generate_service = Arc::new(GenerateService::new(
@@ -95,7 +88,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let app = build_app(state);
     let listener = TcpListener::bind(address).await?;
 
-    info!(address = %address, "ai-gateway is listening");
+    info!(address = %listener.local_addr()?, "ai-gateway is listening");
 
     let (draining, drain_started) = tokio::sync::oneshot::channel();
     let shutdown_updates = updates.clone();

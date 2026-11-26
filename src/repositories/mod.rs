@@ -1,15 +1,27 @@
-pub mod postgres_auth;
-pub mod postgres_requests;
-pub mod postgres_routes;
+// SQLx uses different native encodings for UUIDs and timestamps on each backend.
+// Dispatch on the pool so both drivers type-check the same query or transaction.
+macro_rules! with_pool {
+    ($database:expr, |$pool:ident| $body:expr) => {
+        match $database {
+            $crate::repositories::Database::Postgres($pool) => $body,
+            $crate::repositories::Database::Sqlite($pool) => $body,
+        }
+    };
+}
+
+pub mod auth;
+pub(crate) mod database;
+pub mod requests;
+pub mod routes;
 
 use crate::config::AppConfig;
-use sqlx::PgPool;
 use thiserror::Error;
 use uuid::Uuid;
 
-pub use postgres_auth::PostgresAuthRepository;
-pub use postgres_requests::PostgresRequestsRepository;
-pub use postgres_routes::PostgresRoutesRepository;
+pub use auth::AuthRepository;
+pub use database::Database;
+pub use requests::RequestsRepository;
+pub use routes::RoutesRepository;
 
 #[derive(Debug, Error)]
 pub enum RepositoryError {
@@ -34,71 +46,89 @@ impl RepositoryError {
     }
 }
 
-pub async fn seed_defaults(pool: &PgPool, config: &AppConfig) -> Result<(), RepositoryError> {
-    let default_tenant_id: Uuid = sqlx::query_scalar(
-        r#"
-        SELECT id
-        FROM tenants
-        WHERE slug = 'default'
-        LIMIT 1
-        "#,
-    )
-    .fetch_one(pool)
-    .await?;
-
-    sqlx::query(
-        r#"
-        INSERT INTO providers (
-            tenant_id,
-            code,
-            kind,
-            base_url,
-            api_key_env,
-            is_enabled,
-            timeout_ms
+pub async fn seed_defaults(database: &Database, config: &AppConfig) -> Result<(), RepositoryError> {
+    with_pool!(database, |pool| {
+        let mut tx = pool.begin().await?;
+        sqlx::query(
+            r#"
+            INSERT INTO tenants (id, name, slug) VALUES ($1, 'Default tenant', 'default')
+            ON CONFLICT (slug) DO NOTHING
+            "#,
         )
-        VALUES ($1, $2, $3, $4, $5, TRUE, $6)
-        ON CONFLICT (tenant_id, code) DO UPDATE
-        SET
-            kind = EXCLUDED.kind,
-            base_url = EXCLUDED.base_url,
-            api_key_env = EXCLUDED.api_key_env,
-            timeout_ms = EXCLUDED.timeout_ms,
-            updated_at = NOW()
-        "#,
-    )
-    .bind(default_tenant_id)
-    .bind(&config.default_provider_code)
-    .bind(&config.default_provider_kind)
-    .bind(&config.default_provider_base_url)
-    .bind("")
-    .bind(config.default_provider_timeout_ms)
-    .execute(pool)
-    .await?;
+        .bind(Uuid::new_v4())
+        .execute(&mut *tx)
+        .await?;
 
-    sqlx::query(
-        r#"
-        INSERT INTO model_routes (
-            tenant_id,
-            alias,
-            provider_code,
-            external_model,
-            is_enabled
+        let default_tenant_id: Uuid = sqlx::query_scalar(
+            r#"
+            SELECT id
+            FROM tenants
+            WHERE slug = 'default'
+            LIMIT 1
+            "#,
         )
-        VALUES ($1, $2, $3, $4, TRUE)
-        ON CONFLICT (tenant_id, alias) DO UPDATE
-        SET
-            provider_code = EXCLUDED.provider_code,
-            external_model = EXCLUDED.external_model,
-            updated_at = NOW()
-        "#,
-    )
-    .bind(default_tenant_id)
-    .bind(&config.default_model_alias)
-    .bind(&config.default_provider_code)
-    .bind(&config.default_external_model)
-    .execute(pool)
-    .await?;
+        .fetch_one(&mut *tx)
+        .await?;
 
-    Ok(())
+        sqlx::query(
+            r#"
+            INSERT INTO providers (
+                id,
+                tenant_id,
+                code,
+                kind,
+                base_url,
+                api_key_env,
+                is_enabled,
+                timeout_ms
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, TRUE, $7)
+            ON CONFLICT (tenant_id, code) DO UPDATE
+            SET
+                kind = EXCLUDED.kind,
+                base_url = EXCLUDED.base_url,
+                api_key_env = EXCLUDED.api_key_env,
+                timeout_ms = EXCLUDED.timeout_ms,
+                updated_at = CURRENT_TIMESTAMP
+            "#,
+        )
+        .bind(Uuid::new_v4())
+        .bind(default_tenant_id)
+        .bind(&config.default_provider_code)
+        .bind(&config.default_provider_kind)
+        .bind(&config.default_provider_base_url)
+        .bind("")
+        .bind(config.default_provider_timeout_ms)
+        .execute(&mut *tx)
+        .await?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO model_routes (
+                id,
+                tenant_id,
+                alias,
+                provider_code,
+                external_model,
+                is_enabled
+            )
+            VALUES ($1, $2, $3, $4, $5, TRUE)
+            ON CONFLICT (tenant_id, alias) DO UPDATE
+            SET
+                provider_code = EXCLUDED.provider_code,
+                external_model = EXCLUDED.external_model,
+                updated_at = CURRENT_TIMESTAMP
+            "#,
+        )
+        .bind(Uuid::new_v4())
+        .bind(default_tenant_id)
+        .bind(&config.default_model_alias)
+        .bind(&config.default_provider_code)
+        .bind(&config.default_external_model)
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+        Ok(())
+    })
 }

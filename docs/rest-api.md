@@ -345,7 +345,7 @@ Readiness не вызывает `ProviderAdapter.generate`, не отправл�
 | --- | --- |
 | `model_route=error`, `route_not_found` | Проверьте tenant, alias и включённость route/provider |
 | `provider_adapter=error` | Укажите зарегистрированный kind; для совместимых API — `openai-compatible` |
-| `provider_credentials=error`, `gateway_misconfigured` | Сохраните API key; при проблеме расшифровки проверьте master key и key version |
+| `provider_credentials=error`, `gateway_misconfigured` | Сохраните API key. При ошибке расшифровки проверьте версию ключа и мастер-ключ из `GATEWAY_MASTER_KEY` или `ai-gateway.key` |
 | `provider_parameters=error` | Исправьте HTTP(S) base URL, исключите credentials/query/fragment |
 | `provider_timeout=error` | Задайте положительный timeout_ms |
 | `provider_error` | Сопоставьте request ID и upstream HTTP status: 401/403 — авторизация/доступ, 404 — модель или путь, 429 — ограничение upstream, 5xx — сбой upstream |
@@ -354,6 +354,6 @@ Readiness не вызывает `ProviderAdapter.generate`, не отправл�
 | `provider_invalid_response` | Проверьте совместимость API и корректность возвращаемых tool calls/аргументов |
 | `tool_calling_not_supported`, `tool_call_not_returned` | Выберите модель с Tool Calling и повторите явный smoke-test; результат не считается успешным |
 | `invalid_request` | Проверьте JSON, лимиты, JSON Schema и полноту истории tool calls/results |
-| `storage_error`, `failed to persist request log` | Проверьте PostgreSQL по технической категории; ошибка записи истории не отменяет уже выполненную генерацию |
+| `storage_error`, `failed to persist request log` | Проверьте доступ к настроенной базе данных. Ошибка записи истории не отменяет уже выполненную генерацию |
 
 Gateway и smoke-test не делают автоматических повторов, fallback или переходов по upstream redirect. Если модель отклонила `max_tokens`, опустите `options.max_tokens` и повторите вручную; smoke-test изначально не задаёт provider-specific ограничения токенов.

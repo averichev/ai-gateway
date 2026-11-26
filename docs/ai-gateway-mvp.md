@@ -113,7 +113,7 @@ make docker-run IMAGE=ghcr.io/<username>/ai-gateway TAG=v0.1.0 ENV_FILE=.env POR
 ### Важные env-переменные
 
 - `DATABASE_URL`
-- `GATEWAY_MASTER_KEY`
+- `GATEWAY_MASTER_KEY` для явно заданного мастер-ключа. По умолчанию используется файл `ai-gateway.key` в рабочей папке.
 - `DEFAULT_PROVIDER_CODE`
 - `DEFAULT_PROVIDER_KIND`
 - `DEFAULT_PROVIDER_BASE_URL`

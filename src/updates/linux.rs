@@ -10,20 +10,27 @@ use standalone_updater::{
 };
 
 use super::{PRODUCT_ID, Updates, VERSION};
-use crate::server::MIGRATOR;
+use crate::repositories::database::{POSTGRES_MIGRATOR, SQLITE_MIGRATOR};
 
 pub(crate) fn build_info() -> BuildInfo {
     let mut hash = Sha256::new();
     // Bump the format marker when changing persisted formats outside migrations.
     hash.update(b"ai-gateway:provider-secrets-aes256gcm-v1\0");
+    hash.update(b"ai-gateway:master-key-file-base64-v1\0");
     // Keep the UI delivery contract across binary replacements.
     hash.update([u8::from(cfg!(feature = "embedded-admin"))]);
-    for migration in MIGRATOR
-        .iter()
-        .filter(|m| m.migration_type.is_up_migration())
-    {
-        hash.update(migration.version.to_be_bytes());
-        hash.update(migration.checksum.as_ref());
+    for (backend, migrations) in [
+        ("postgres", &POSTGRES_MIGRATOR),
+        ("sqlite", &SQLITE_MIGRATOR),
+    ] {
+        hash.update(backend.as_bytes());
+        for migration in migrations
+            .iter()
+            .filter(|m| m.migration_type.is_up_migration())
+        {
+            hash.update(migration.version.to_be_bytes());
+            hash.update(migration.checksum.as_ref());
+        }
     }
     BuildInfo {
         version: VERSION.into(),

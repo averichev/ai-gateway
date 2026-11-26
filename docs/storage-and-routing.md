@@ -24,7 +24,7 @@ Plaintext provider API key не хранится и не возвращаетс�
 
 Для MVP используется AES-256-GCM:
 
-- env: `GATEWAY_MASTER_KEY=<base64-32-byte-key>`
+- мастер-ключ берётся из `GATEWAY_MASTER_KEY`, если переменная задана, или из файла `ai-gateway.key` в рабочей папке
 - DB: `ciphertext`, `nonce`, `algorithm`, `key_version`
 
 Decrypted key существует только в памяти при generate flow и локальной проверке readiness; readiness не обращается к upstream. Его нельзя логировать, возвращать в API или писать в request history.
@@ -36,7 +36,7 @@ Decrypted key существует только в памяти при generate 
 3. Из `gateway_clients.tenant_id` определяется tenant.
 4. `model_routes` ищется по `(tenant_id, alias)`.
 5. Provider ищется по `(tenant_id, provider_code)`.
-6. Provider secret берётся из `provider_secrets` и расшифровывается через `GATEWAY_MASTER_KEY`.
+6. Provider secret берётся из `provider_secrets` и расшифровывается мастер-ключом шлюза.
 7. Adapter вызывает внешний AI API.
 8. `requests` получает `tenant_id` и `gateway_client_id`.
 

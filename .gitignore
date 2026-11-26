@@ -2,6 +2,14 @@
 /releases/
 .references/
 
+# Local SQLite database and journal files
+/ai-gateway.sqlite3
+/ai-gateway.sqlite3-*
+
+# Locally generated master key and its temporary files
+ai-gateway.key
+.ai-gateway.key-*
+
 # Local environment files
 .env
 .env.local

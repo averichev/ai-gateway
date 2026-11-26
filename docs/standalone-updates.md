@@ -10,10 +10,10 @@
 
 ## Подключение канала
 
-Укажите полный URL манифеста в окружении шлюза или в рабочем `.env` для `agctl apply`. UUID продукта и публичный ключ для проверки подписи уже встроены в AI Gateway.
+Официальный канал задан в `.env.example` и в окружении, которое создаёт `agctl init`. Чтобы подключить канал на существующей установке, задайте переменную в окружении службы и перезапустите её. Для развёртывания через `agctl` добавьте строку в рабочий `.env` и выполните `agctl apply`. UUID продукта и публичный ключ уже встроены в AI Gateway.
 
 ```dotenv
-GATEWAY_UPDATE_SOURCE=https://updates.example.org/ai-gateway/manifest.json
+GATEWAY_UPDATE_SOURCE=https://app.releases.veruna.systems/ai-gateway/manifest.json
 ```
 
 При проверке шлюз делает один GET к манифесту и ищет более новую стабильную версию для своей платформы. Публикуйте бинарники на том же HTTPS-origin, что и манифест (схема, хост и порт), включая адрес после перенаправлений. Лимит одного бинарника — 256 МиБ. Для локальной проверки допустим HTTP на loopback IP.
@@ -43,7 +43,7 @@ node scripts/sign-update.mjs target/release/ai-gateway build-info.json > signed_
     "artifacts": [{
       "purpose": "executable",
       "target": "linux-aarch64",
-      "download_url": "https://updates.example.org/ai-gateway/0.1.1/ai-gateway-linux-aarch64",
+      "download_url": "<полный HTTPS-адрес бинарника на том же хосте и порту, что и манифест>",
       "signed_metadata": "<строка из signed_metadata.jws>"
     }]
   }]
